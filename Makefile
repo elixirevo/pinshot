@@ -5,9 +5,10 @@ OUT_DIR = build
 APP_BUNDLE = $(OUT_DIR)/$(APP_NAME).app
 APP_INFO_PLIST = $(APP_BUNDLE)/Contents/Info.plist
 DIST_DIR = dist
-DMG_PATH = $(DIST_DIR)/$(APP_NAME)-$(VERSION).dmg
+ARCH ?= $(shell uname -m)
+DMG_PATH = $(DIST_DIR)/$(APP_NAME)-$(VERSION)-$(ARCH).dmg
 SWIFTC = swiftc
-SWIFT_FLAGS = -O -sdk $(shell xcrun --show-sdk-path --sdk macosx) -target $(shell uname -m)-apple-macos12.0
+SWIFT_FLAGS = -O -sdk $(shell xcrun --show-sdk-path --sdk macosx) -target $(ARCH)-apple-macos12.0
 VERSION ?= 1.0.0
 BUILD ?= 1
 
@@ -24,12 +25,12 @@ $(APP_BUNDLE): $(SRC_DIR)/*.swift Info.plist
 
 release:
 	@if [ -z "$(VERSION)" ] || [ -z "$(BUILD)" ]; then \
-		echo "Usage: make release VERSION=1.0.0 BUILD=1"; \
+		echo "Usage: make release VERSION=1.0.0 BUILD=1 ARCH=arm64|x86_64"; \
 		exit 1; \
 	fi
 	$(MAKE) clean
-	$(MAKE) all VERSION=$(VERSION) BUILD=$(BUILD)
-	@echo "Built $(APP_BUNDLE) with version $(VERSION) ($(BUILD))"
+	$(MAKE) all VERSION=$(VERSION) BUILD=$(BUILD) ARCH=$(ARCH)
+	@echo "Built $(APP_BUNDLE) with version $(VERSION) ($(BUILD)) for $(ARCH)"
 
 dmg: release
 	chmod +x scripts/create_dmg.sh

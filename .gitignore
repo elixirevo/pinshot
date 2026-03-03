@@ -1,5 +1,6 @@
 .DS_Store
 dist
+artifacts
 # macOS
 .AppleDouble
 .LSOverride

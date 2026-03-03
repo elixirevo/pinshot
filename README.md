@@ -55,13 +55,13 @@ PinShot is built using a simple `Makefile`. No heavy Xcode project setup is requ
    Release build with version metadata:
 
    ```bash
-   make release VERSION=1.0.0 BUILD=1
+   make release VERSION=1.0.0 BUILD=1 ARCH=arm64
    ```
 
    Build a distributable DMG (includes app, Applications link, and drag-to-install arrow layout):
 
    ```bash
-   make dmg VERSION=1.0.0 BUILD=1
+   make dmg VERSION=1.0.0 BUILD=1 ARCH=x86_64
    ```
 
 3. The built application will be located at `build/PinShot.app`.
