@@ -1,0 +1,15 @@
+.DS_Store
+dist
+# macOS
+.AppleDouble
+.LSOverride
+
+# Local build outputs
+.build/
+build/
+
+# Editor/temp files
+*.swp
+*.swo
+*.tmp
+*.log
