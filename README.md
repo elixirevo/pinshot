@@ -32,6 +32,19 @@
 
 PinShot is built using a simple `Makefile`. No heavy Xcode project setup is required.
 
+### Install via Homebrew
+
+```bash
+brew tap elixirevo/tap
+brew install --cask pinshot
+```
+
+If you already tapped `elixirevo/tap`, this also works:
+
+```bash
+brew install --cask pinshot
+```
+
 ### Prerequisites
 
 * macOS 12.0 or later
@@ -42,8 +55,8 @@ PinShot is built using a simple `Makefile`. No heavy Xcode project setup is requ
 1. Clone the repository:
 
    ```bash
-   git clone https://github.com/yourusername/PinShot.git
-   cd PinShot
+   git clone https://github.com/elixirevo/pinshot.git
+   cd pinshot
    ```
 
 2. Build the app using `make`:
