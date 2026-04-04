@@ -15,18 +15,26 @@
 * **Custom Region Capture:** Click and **drag** to select and capture a specific region of your screen.
 * **Multi-Monitor Support:** Works seamlessly across all your connected displays.
 * **Always on Top:** Pinned screenshots float above all other windows, ensuring your reference material is never hidden.
+* **Quick Save Screenshot:** Press `Option + 2` to save a screenshot to `~/Pictures/PinShotCaptures` and reuse the last selected region.
+* **Region Overlay Preview:** When you save with `Option + 2`, the saved area stays highlighted until you press `Esc`.
+* **Pixel Magnifier:** While selecting a save region, a zoom lens shows cursor-adjacent pixels with pixel coordinates.
+* **Opt+2 Macro Panel:** With `Option + 2`, a macro panel appears below the region so you can run a loop: screenshot -> after-shortcut -> post-delay -> repeat.
 * **Lightweight & Native:** Built purely with Swift and AppKit (No Electron, minimal resource usage).
 
 ## ⌨️ Shortcuts
 
 | Shortcut | Action |
 | --- | --- |
-| `Option + 1` | Start Capture (Freeze screen & open selection overlay) |
+| `Option + 1` | Start Capture (CoreGraphics freeze capture) |
+| `Option + 2` | Save screenshot to `~/Pictures/PinShotCaptures` (uses remembered region; first time asks for drag selection) |
+| `Option + 3` | Set screenshot region (drag to reselect and save immediately) |
 | `Cmd + Option + W` | Close all pinned screenshot windows |
-| `Esc` | Cancel capture mode |
+| `Esc` | Cancel capture mode / hide saved-region overlay |
 
 *(Once a screenshot is pinned, you can also hover over it to find individual close buttons or use drag to move it around).*
-*You can change global shortcuts from the menu bar: `Change Capture Shortcut…` / `Change Close-All Shortcut…`.*
+*You can change global shortcuts from the menu bar: `Change Capture Shortcut…` / `Change Save-Screenshot Shortcut…` / `Change Set-Region Shortcut…` / `Change Close-All Shortcut…`.*
+*Use `Set Screenshot Region…` in the menu to reselect the saved region at any time.*
+*Use `Play Macro` / `Stop Macro` in the Opt+2 macro panel to start or stop loop playback.*
 
 ## 🚀 Installation & Build
 

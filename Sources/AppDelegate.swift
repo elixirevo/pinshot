@@ -4,6 +4,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var statusItem: NSStatusItem!
     private var launchAtLoginMenuItem: NSMenuItem?
     private var captureMenuItem: NSMenuItem?
+    private var saveScreenshotMenuItem: NSMenuItem?
+    private var setScreenshotRegionMenuItem: NSMenuItem?
     private var closeAllMenuItem: NSMenuItem?
     
     func applicationDidFinishLaunching(_ aNotification: Notification) {
@@ -29,6 +31,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(captureItem)
         captureMenuItem = captureItem
 
+        let saveScreenshotItem = NSMenuItem(
+            title: "Capture & Save Screenshot",
+            action: #selector(saveScreenshotClicked),
+            keyEquivalent: ""
+        )
+        saveScreenshotItem.target = self
+        menu.addItem(saveScreenshotItem)
+        saveScreenshotMenuItem = saveScreenshotItem
+
         let closeItem = NSMenuItem(title: "Close All Pins", action: #selector(closeAllClicked), keyEquivalent: "")
         closeItem.target = self
         menu.addItem(closeItem)
@@ -37,6 +48,31 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let changeCaptureItem = NSMenuItem(title: "Change Capture Shortcut…", action: #selector(changeCaptureShortcut), keyEquivalent: "")
         changeCaptureItem.target = self
         menu.addItem(changeCaptureItem)
+
+        let changeSaveScreenshotItem = NSMenuItem(
+            title: "Change Save-Screenshot Shortcut…",
+            action: #selector(changeSaveScreenshotShortcut),
+            keyEquivalent: ""
+        )
+        changeSaveScreenshotItem.target = self
+        menu.addItem(changeSaveScreenshotItem)
+
+        let setScreenshotRegionItem = NSMenuItem(
+            title: "Set Screenshot Region…",
+            action: #selector(setScreenshotRegionClicked),
+            keyEquivalent: ""
+        )
+        setScreenshotRegionItem.target = self
+        menu.addItem(setScreenshotRegionItem)
+        setScreenshotRegionMenuItem = setScreenshotRegionItem
+
+        let changeSetScreenshotRegionItem = NSMenuItem(
+            title: "Change Set-Region Shortcut…",
+            action: #selector(changeSetScreenshotRegionShortcut),
+            keyEquivalent: ""
+        )
+        changeSetScreenshotRegionItem.target = self
+        menu.addItem(changeSetScreenshotRegionItem)
 
         let changeCloseAllItem = NSMenuItem(title: "Change Close-All Shortcut…", action: #selector(changeCloseAllShortcut), keyEquivalent: "")
         changeCloseAllItem.target = self
@@ -88,6 +124,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         HotkeyManager.shared.onCaptureShortcut = { [weak self] in
             self?.captureClicked()
         }
+
+        HotkeyManager.shared.onSaveScreenshotShortcut = { [weak self] in
+            self?.saveScreenshotClicked()
+        }
+
+        HotkeyManager.shared.onSetScreenshotRegionShortcut = { [weak self] in
+            self?.setScreenshotRegionClicked()
+        }
         
         HotkeyManager.shared.onCloseAllShortcut = { [weak self] in
             self?.closeAllClicked()
@@ -100,7 +144,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             PinManager.shared.pin(image: result.0, at: result.1)
         }
     }
-    
+
+    @objc private func saveScreenshotClicked() {
+        ScreenshotSaveManager.shared.captureUsingSavedRegionOrPromptSelection()
+    }
+
+    @objc private func setScreenshotRegionClicked() {
+        ScreenshotSaveManager.shared.selectRegionAndCaptureAndSave()
+    }
+
     @objc private func closeAllClicked() {
         PinManager.shared.closeAll()
     }
@@ -125,6 +177,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func updateHotkeyMenuItems() {
         captureMenuItem?.title = "Capture & Pin (\(HotkeyManager.shared.captureShortcutDisplay))"
+        saveScreenshotMenuItem?.title = "Capture & Save Screenshot (\(HotkeyManager.shared.saveScreenshotShortcutDisplay))"
+        setScreenshotRegionMenuItem?.title = "Set Screenshot Region… (\(HotkeyManager.shared.setScreenshotRegionShortcutDisplay))"
         closeAllMenuItem?.title = "Close All Pins (\(HotkeyManager.shared.closeAllShortcutDisplay))"
     }
 
@@ -132,6 +186,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         promptForShortcutChange(
             action: .capture,
             title: "Change Capture Shortcut"
+        )
+    }
+
+    @objc private func changeSaveScreenshotShortcut() {
+        promptForShortcutChange(
+            action: .saveScreenshot,
+            title: "Change Save-Screenshot Shortcut"
+        )
+    }
+
+    @objc private func changeSetScreenshotRegionShortcut() {
+        promptForShortcutChange(
+            action: .setScreenshotRegion,
+            title: "Change Set-Region Shortcut"
         )
     }
 
@@ -145,6 +213,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func resetShortcutsToDefault() {
         do {
             try HotkeyManager.shared.resetShortcut(action: .capture)
+            try HotkeyManager.shared.resetShortcut(action: .saveScreenshot)
+            try HotkeyManager.shared.resetShortcut(action: .setScreenshotRegion)
             try HotkeyManager.shared.resetShortcut(action: .closeAll)
             updateHotkeyMenuItems()
         } catch {
@@ -156,7 +226,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let alert = NSAlert()
         alert.alertStyle = .informational
         alert.messageText = title
-        alert.informativeText = "Press the shortcut keys now. At least one modifier is required."
+        alert.informativeText = "Press the shortcut keys now. Modifier keys are optional."
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Cancel")
 

@@ -3,6 +3,8 @@ import Carbon
 
 enum HotkeyAction {
     case capture
+    case saveScreenshot
+    case setScreenshotRegion
     case closeAll
 }
 
@@ -16,11 +18,11 @@ enum HotkeyError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidFormat:
-            return "Use format like command+option+1 or option+w."
+            return "Use format like command+option+1, option+w, or a single key like a."
         case .unknownKey:
-            return "Unsupported key. Use A-Z, 0-9, or F1-F12."
+            return "Unsupported key. Use A-Z, 0-9, arrow keys, or F1-F12."
         case .missingModifier:
-            return "At least one modifier is required (command/option/control/shift)."
+            return "Modifier keys are optional."
         case .duplicateShortcut:
             return "That shortcut is already used by another action."
         case .registerFailed(let status):
@@ -59,7 +61,7 @@ struct HotkeyShortcut: Equatable {
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
             .filter { !$0.isEmpty }
 
-        guard tokens.count >= 2 else { throw HotkeyError.invalidFormat }
+        guard tokens.count >= 1 else { throw HotkeyError.invalidFormat }
         guard let keyToken = tokens.last else { throw HotkeyError.invalidFormat }
 
         var modifiers: UInt32 = 0
@@ -78,7 +80,6 @@ struct HotkeyShortcut: Equatable {
             }
         }
 
-        guard modifiers != 0 else { throw HotkeyError.missingModifier }
         guard let keyCode = Self.keyCodeMap[keyToken] else { throw HotkeyError.unknownKey }
 
         return HotkeyShortcut(keyCode: keyCode, modifiers: normalizeModifiers(modifiers))
@@ -86,7 +87,6 @@ struct HotkeyShortcut: Equatable {
 
     static func from(event: NSEvent) throws -> HotkeyShortcut {
         let modifiers = modifierMask(from: event.modifierFlags)
-        guard modifiers != 0 else { throw HotkeyError.missingModifier }
 
         let keyCode = UInt32(event.keyCode)
         guard supports(keyCode: keyCode) else { throw HotkeyError.unknownKey }
@@ -99,6 +99,10 @@ struct HotkeyShortcut: Equatable {
         case UInt32(kVK_Return): return "↩"
         case UInt32(kVK_Escape): return "⎋"
         case UInt32(kVK_Space): return "Space"
+        case UInt32(kVK_LeftArrow): return "←"
+        case UInt32(kVK_RightArrow): return "→"
+        case UInt32(kVK_UpArrow): return "↑"
+        case UInt32(kVK_DownArrow): return "↓"
         default:
             return reverseKeyCodeMap[keyCode] ?? "?"
         }
@@ -109,6 +113,10 @@ struct HotkeyShortcut: Equatable {
         case UInt32(kVK_Return): return "return"
         case UInt32(kVK_Escape): return "escape"
         case UInt32(kVK_Space): return "space"
+        case UInt32(kVK_LeftArrow): return "left"
+        case UInt32(kVK_RightArrow): return "right"
+        case UInt32(kVK_UpArrow): return "up"
+        case UInt32(kVK_DownArrow): return "down"
         default:
             return (reverseKeyCodeMap[keyCode] ?? "?").lowercased()
         }
@@ -131,7 +139,11 @@ struct HotkeyShortcut: Equatable {
             "9": UInt32(kVK_ANSI_9),
             "return": UInt32(kVK_Return), "enter": UInt32(kVK_Return),
             "escape": UInt32(kVK_Escape), "esc": UInt32(kVK_Escape),
-            "space": UInt32(kVK_Space)
+            "space": UInt32(kVK_Space),
+            "left": UInt32(kVK_LeftArrow), "leftarrow": UInt32(kVK_LeftArrow),
+            "right": UInt32(kVK_RightArrow), "rightarrow": UInt32(kVK_RightArrow),
+            "up": UInt32(kVK_UpArrow), "uparrow": UInt32(kVK_UpArrow),
+            "down": UInt32(kVK_DownArrow), "downarrow": UInt32(kVK_DownArrow)
         ]
 
         let functionKeys: [(String, Int)] = [
@@ -164,21 +176,34 @@ class HotkeyManager {
     static let shared = HotkeyManager()
 
     var onCaptureShortcut: (() -> Void)?
+    var onSaveScreenshotShortcut: (() -> Void)?
+    var onSetScreenshotRegionShortcut: (() -> Void)?
     var onCloseAllShortcut: (() -> Void)?
 
     var captureShortcutDisplay: String { captureShortcut.displayString }
+    var saveScreenshotShortcutDisplay: String { saveScreenshotShortcut.displayString }
+    var setScreenshotRegionShortcutDisplay: String { setScreenshotRegionShortcut.displayString }
     var closeAllShortcutDisplay: String { closeAllShortcut.displayString }
     var captureShortcutEditable: String { captureShortcut.editableString }
+    var saveScreenshotShortcutEditable: String { saveScreenshotShortcut.editableString }
+    var setScreenshotRegionShortcutEditable: String { setScreenshotRegionShortcut.editableString }
     var closeAllShortcutEditable: String { closeAllShortcut.editableString }
 
     private var captureHotKeyRef: EventHotKeyRef?
+    private var saveScreenshotHotKeyRef: EventHotKeyRef?
+    private var setScreenshotRegionHotKeyRef: EventHotKeyRef?
     private var closeAllHotKeyRef: EventHotKeyRef?
 
     private var captureShortcut: HotkeyShortcut
+    private var saveScreenshotShortcut: HotkeyShortcut
+    private var setScreenshotRegionShortcut: HotkeyShortcut
     private var closeAllShortcut: HotkeyShortcut
 
     private let defaults = UserDefaults.standard
     private let captureDefaultsKey = "hotkey.capture"
+    private let saveScreenshotDefaultsKey = "hotkey.saveScreenshot"
+    private let setScreenshotRegionDefaultsKey = "hotkey.setScreenshotRegion"
+    private let legacyCaptureScreenCaptureKitDefaultsKey = "hotkey.captureScreenCaptureKit"
     private let closeAllDefaultsKey = "hotkey.closeAll"
 
     init() {
@@ -186,6 +211,21 @@ class HotkeyManager {
             from: UserDefaults.standard,
             key: "hotkey.capture",
             fallback: HotkeyShortcut(keyCode: UInt32(kVK_ANSI_1), modifiers: UInt32(optionKey))
+        )
+        let legacySaveShortcut = Self.loadShortcut(
+            from: UserDefaults.standard,
+            key: legacyCaptureScreenCaptureKitDefaultsKey,
+            fallback: HotkeyShortcut(keyCode: UInt32(kVK_ANSI_2), modifiers: UInt32(optionKey))
+        )
+        saveScreenshotShortcut = Self.loadShortcut(
+            from: UserDefaults.standard,
+            key: saveScreenshotDefaultsKey,
+            fallback: legacySaveShortcut
+        )
+        setScreenshotRegionShortcut = Self.loadShortcut(
+            from: UserDefaults.standard,
+            key: setScreenshotRegionDefaultsKey,
+            fallback: HotkeyShortcut(keyCode: UInt32(kVK_ANSI_3), modifiers: UInt32(optionKey))
         )
         closeAllShortcut = Self.loadShortcut(
             from: UserDefaults.standard,
@@ -209,6 +249,10 @@ class HotkeyManager {
         switch action {
         case .capture:
             return captureShortcut
+        case .saveScreenshot:
+            return saveScreenshotShortcut
+        case .setScreenshotRegion:
+            return setScreenshotRegionShortcut
         case .closeAll:
             return closeAllShortcut
         }
@@ -219,6 +263,10 @@ class HotkeyManager {
         switch action {
         case .capture:
             fallback = HotkeyShortcut(keyCode: UInt32(kVK_ANSI_1), modifiers: UInt32(optionKey))
+        case .saveScreenshot:
+            fallback = HotkeyShortcut(keyCode: UInt32(kVK_ANSI_2), modifiers: UInt32(optionKey))
+        case .setScreenshotRegion:
+            fallback = HotkeyShortcut(keyCode: UInt32(kVK_ANSI_3), modifiers: UInt32(optionKey))
         case .closeAll:
             fallback = HotkeyShortcut(keyCode: UInt32(kVK_ANSI_W), modifiers: UInt32(cmdKey | optionKey))
         }
@@ -248,6 +296,10 @@ class HotkeyManager {
                 DispatchQueue.main.async { manager.onCaptureShortcut?() }
             } else if hotkeyID.id == 2 {
                 DispatchQueue.main.async { manager.onCloseAllShortcut?() }
+            } else if hotkeyID.id == 3 {
+                DispatchQueue.main.async { manager.onSaveScreenshotShortcut?() }
+            } else if hotkeyID.id == 4 {
+                DispatchQueue.main.async { manager.onSetScreenshotRegionShortcut?() }
             }
             return noErr
         }, 1, &eventType, ptr, nil)
@@ -257,14 +309,15 @@ class HotkeyManager {
         do {
             try registerHotKey(captureShortcut, id: 1, ref: &captureHotKeyRef)
             try registerHotKey(closeAllShortcut, id: 2, ref: &closeAllHotKeyRef)
+            try registerHotKey(saveScreenshotShortcut, id: 3, ref: &saveScreenshotHotKeyRef)
+            try registerHotKey(setScreenshotRegionShortcut, id: 4, ref: &setScreenshotRegionHotKeyRef)
         } catch {
             // Keep app running even if global shortcut registration fails.
         }
     }
 
     private func setShortcut(action: HotkeyAction, shortcut: HotkeyShortcut, persist: Bool) throws {
-        let otherShortcut = (action == .capture) ? closeAllShortcut : captureShortcut
-        if shortcut == otherShortcut {
+        if shortcutsExcluding(action).contains(shortcut) {
             throw HotkeyError.duplicateShortcut
         }
 
@@ -281,6 +334,28 @@ class HotkeyManager {
                 try? registerHotKey(oldShortcut, id: 1, ref: &captureHotKeyRef)
                 throw error
             }
+        case .saveScreenshot:
+            oldShortcut = saveScreenshotShortcut
+            unregister(ref: &saveScreenshotHotKeyRef)
+            do {
+                try registerHotKey(shortcut, id: 3, ref: &saveScreenshotHotKeyRef)
+                saveScreenshotShortcut = shortcut
+                if persist { saveShortcut(shortcut, key: saveScreenshotDefaultsKey) }
+            } catch {
+                try? registerHotKey(oldShortcut, id: 3, ref: &saveScreenshotHotKeyRef)
+                throw error
+            }
+        case .setScreenshotRegion:
+            oldShortcut = setScreenshotRegionShortcut
+            unregister(ref: &setScreenshotRegionHotKeyRef)
+            do {
+                try registerHotKey(shortcut, id: 4, ref: &setScreenshotRegionHotKeyRef)
+                setScreenshotRegionShortcut = shortcut
+                if persist { saveShortcut(shortcut, key: setScreenshotRegionDefaultsKey) }
+            } catch {
+                try? registerHotKey(oldShortcut, id: 4, ref: &setScreenshotRegionHotKeyRef)
+                throw error
+            }
         case .closeAll:
             oldShortcut = closeAllShortcut
             unregister(ref: &closeAllHotKeyRef)
@@ -292,6 +367,19 @@ class HotkeyManager {
                 try? registerHotKey(oldShortcut, id: 2, ref: &closeAllHotKeyRef)
                 throw error
             }
+        }
+    }
+
+    private func shortcutsExcluding(_ action: HotkeyAction) -> [HotkeyShortcut] {
+        switch action {
+        case .capture:
+            return [saveScreenshotShortcut, setScreenshotRegionShortcut, closeAllShortcut]
+        case .saveScreenshot:
+            return [captureShortcut, setScreenshotRegionShortcut, closeAllShortcut]
+        case .setScreenshotRegion:
+            return [captureShortcut, saveScreenshotShortcut, closeAllShortcut]
+        case .closeAll:
+            return [captureShortcut, saveScreenshotShortcut, setScreenshotRegionShortcut]
         }
     }
 
