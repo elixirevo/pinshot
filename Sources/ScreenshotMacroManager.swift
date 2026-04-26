@@ -9,9 +9,13 @@ final class ScreenshotMacroManager {
     private let afterShortcutDefaultsKey = "macro.afterShortcut"
     private let legacyPreShortcutDefaultsKey = "macro.preShortcut"
     private let postDelayDefaultsKey = "macro.postDelaySeconds"
+    private let restLoopIntervalDefaultsKey = "macro.restLoopInterval"
+    private let restDurationDefaultsKey = "macro.restDurationSeconds"
 
     private var afterShortcutText: String
     private var postDelaySeconds: TimeInterval
+    private var restLoopInterval: Int
+    private var restDurationSeconds: TimeInterval
     private var currentLoop = 0
     private var isRunning = false
     private var runID = UUID()
@@ -26,13 +30,26 @@ final class ScreenshotMacroManager {
             ""
         let storedDelay = defaults.object(forKey: postDelayDefaultsKey) as? Double ?? 1.0
         postDelaySeconds = Self.clampDelay(storedDelay)
+        let storedRestLoopInterval = defaults.object(forKey: restLoopIntervalDefaultsKey) == nil
+            ? 10
+            : defaults.integer(forKey: restLoopIntervalDefaultsKey)
+        restLoopInterval = Self.clampRestLoopInterval(storedRestLoopInterval)
+        let storedRestDuration = defaults.object(forKey: restDurationDefaultsKey) as? Double ?? 10.0
+        restDurationSeconds = Self.clampDelay(storedRestDuration)
 
         MacroControlWindowManager.shared.configure(
             afterShortcutText: afterShortcutText,
-            postDelaySeconds: postDelaySeconds
+            postDelaySeconds: postDelaySeconds,
+            restLoopInterval: restLoopInterval,
+            restDurationSeconds: restDurationSeconds
         )
-        MacroControlWindowManager.shared.onPlayRequested = { [weak self] afterShortcut, postDelay in
-            self?.startPlayback(afterShortcutText: afterShortcut, postDelaySeconds: postDelay)
+        MacroControlWindowManager.shared.onPlayRequested = { [weak self] afterShortcut, postDelay, restLoopInterval, restDuration in
+            self?.startPlayback(
+                afterShortcutText: afterShortcut,
+                postDelaySeconds: postDelay,
+                restLoopInterval: restLoopInterval,
+                restDurationSeconds: restDuration
+            )
         }
         MacroControlWindowManager.shared.onStopRequested = { [weak self] in
             self?.stopPlayback(hideWindow: false)
@@ -43,7 +60,9 @@ final class ScreenshotMacroManager {
     func showControlWindow(below region: NSRect) {
         MacroControlWindowManager.shared.configure(
             afterShortcutText: afterShortcutText,
-            postDelaySeconds: postDelaySeconds
+            postDelaySeconds: postDelaySeconds,
+            restLoopInterval: restLoopInterval,
+            restDurationSeconds: restDurationSeconds
         )
         MacroControlWindowManager.shared.updatePlaybackState(isRunning: isRunning, iteration: currentLoop)
         MacroControlWindowManager.shared.show(below: region)
@@ -63,9 +82,22 @@ final class ScreenshotMacroManager {
         }
     }
 
-    private func startPlayback(afterShortcutText: String, postDelaySeconds: TimeInterval) {
+    private func startPlayback(
+        afterShortcutText: String,
+        postDelaySeconds: TimeInterval,
+        restLoopInterval: Int,
+        restDurationSeconds: TimeInterval
+    ) {
         guard let validatedDelay = validateDelay(postDelaySeconds) else {
             showSettingsError("Post delay must be between 0 and 3600 seconds.")
+            return
+        }
+        guard let validatedRestLoopInterval = validateRestLoopInterval(restLoopInterval) else {
+            showSettingsError("Rest loop interval must be between 1 and 1,000,000.")
+            return
+        }
+        guard let validatedRestDuration = validateDelay(restDurationSeconds) else {
+            showSettingsError("Rest duration must be between 0 and 3600 seconds.")
             return
         }
 
@@ -89,8 +121,12 @@ final class ScreenshotMacroManager {
 
         self.afterShortcutText = trimmed
         self.postDelaySeconds = validatedDelay
+        self.restLoopInterval = validatedRestLoopInterval
+        self.restDurationSeconds = validatedRestDuration
         defaults.set(trimmed, forKey: afterShortcutDefaultsKey)
         defaults.set(validatedDelay, forKey: postDelayDefaultsKey)
+        defaults.set(validatedRestLoopInterval, forKey: restLoopIntervalDefaultsKey)
+        defaults.set(validatedRestDuration, forKey: restDurationDefaultsKey)
 
         guard !isRunning else { return }
         guard ScreenshotSaveManager.shared.savedRegionScreenRect() != nil else {
@@ -131,7 +167,8 @@ final class ScreenshotMacroManager {
             self.pendingWorkItem?.cancel()
             self.pendingWorkItem = workItem
             let randomAdditionalDelay = Double.random(in: 0...self.maxRandomAdditionalDelaySeconds)
-            let actualDelay = self.postDelaySeconds + randomAdditionalDelay
+            let restDelay = self.currentLoop.isMultiple(of: self.restLoopInterval) ? self.restDurationSeconds : 0
+            let actualDelay = self.postDelaySeconds + randomAdditionalDelay + restDelay
             DispatchQueue.main.asyncAfter(deadline: .now() + actualDelay, execute: workItem)
         }
     }
@@ -151,10 +188,20 @@ final class ScreenshotMacroManager {
         min(max(value, 0), 3600)
     }
 
+    private static func clampRestLoopInterval(_ value: Int) -> Int {
+        min(max(value, 1), 1_000_000)
+    }
+
     private func validateDelay(_ value: TimeInterval) -> TimeInterval? {
         guard value.isFinite else { return nil }
         let clamped = Self.clampDelay(value)
         guard abs(clamped - value) < 0.000_001 else { return nil }
+        return clamped
+    }
+
+    private func validateRestLoopInterval(_ value: Int) -> Int? {
+        let clamped = Self.clampRestLoopInterval(value)
+        guard clamped == value else { return nil }
         return clamped
     }
 
