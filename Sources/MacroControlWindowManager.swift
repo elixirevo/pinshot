@@ -4,12 +4,13 @@ import Carbon
 final class MacroControlWindowManager: NSObject, NSWindowDelegate {
     static let shared = MacroControlWindowManager()
 
-    var onPlayRequested: ((String, TimeInterval, Int, TimeInterval) -> Void)?
+    var onPlayRequested: ((String, TimeInterval, TimeInterval, Int, TimeInterval) -> Void)?
     var onStopRequested: (() -> Void)?
 
     private var window: NSPanel?
     private var afterShortcutField: NSTextField?
     private var postDelayField: NSTextField?
+    private var macroTermMaxField: NSTextField?
     private var restLoopIntervalField: NSTextField?
     private var restDurationField: NSTextField?
     private var playButton: NSButton?
@@ -34,6 +35,7 @@ final class MacroControlWindowManager: NSObject, NSWindowDelegate {
     func configure(
         afterShortcutText: String,
         postDelaySeconds: TimeInterval,
+        macroTermMaxSeconds: TimeInterval,
         restLoopInterval: Int,
         restDurationSeconds: TimeInterval
     ) {
@@ -41,6 +43,7 @@ final class MacroControlWindowManager: NSObject, NSWindowDelegate {
             self.ensureWindow()
             self.afterShortcutField?.stringValue = afterShortcutText
             self.postDelayField?.stringValue = String(format: "%.2f", postDelaySeconds)
+            self.macroTermMaxField?.stringValue = String(format: "%.2f", macroTermMaxSeconds)
             self.restLoopIntervalField?.stringValue = "\(restLoopInterval)"
             self.restDurationField?.stringValue = String(format: "%.2f", restDurationSeconds)
         }
@@ -97,14 +100,19 @@ final class MacroControlWindowManager: NSObject, NSWindowDelegate {
     }
 
     @objc private func playClicked() {
-        guard let postDelayField, let restLoopIntervalField, let restDurationField else { return }
+        guard let postDelayField, let macroTermMaxField, let restLoopIntervalField, let restDurationField else { return }
         let afterShortcutText = afterShortcutField?.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let delayText = postDelayField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let macroTermMaxText = macroTermMaxField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let restLoopIntervalText = restLoopIntervalField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let restDurationText = restDurationField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard let delay = TimeInterval(delayText), delay.isFinite, delay >= 0 else {
             showValidationError("Post delay must be a number >= 0.")
+            return
+        }
+        guard let macroTermMax = TimeInterval(macroTermMaxText), macroTermMax.isFinite, macroTermMax >= 0 else {
+            showValidationError("Macro term max must be a number >= 0.")
             return
         }
         guard let restLoopInterval = Int(restLoopIntervalText), restLoopInterval > 0 else {
@@ -115,7 +123,7 @@ final class MacroControlWindowManager: NSObject, NSWindowDelegate {
             showValidationError("Rest duration must be a number >= 0.")
             return
         }
-        onPlayRequested?(afterShortcutText, delay, restLoopInterval, restDuration)
+        onPlayRequested?(afterShortcutText, delay, macroTermMax, restLoopInterval, restDuration)
     }
 
     @objc private func stopClicked() {
@@ -134,7 +142,7 @@ final class MacroControlWindowManager: NSObject, NSWindowDelegate {
         guard window == nil else { return }
 
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 285),
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 315),
             styleMask: [.titled, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -152,11 +160,13 @@ final class MacroControlWindowManager: NSObject, NSWindowDelegate {
         let step1 = NSTextField(labelWithString: "1. Screenshot: capture saved Opt+2 region")
         let step2 = NSTextField(labelWithString: "2. After screenshot: trigger shortcut (optional)")
         let step3 = NSTextField(labelWithString: "3. After screenshot: wait N seconds")
-        let step4 = NSTextField(labelWithString: "4. Rest every")
+        let step4 = NSTextField(labelWithString: "4. Macro term: random 0 to")
+        let macroTermSecondsLabel = NSTextField(labelWithString: "seconds")
+        let step5 = NSTextField(labelWithString: "5. Rest every")
         let restLoopsLabel = NSTextField(labelWithString: "loops for")
         let restSecondsLabel = NSTextField(labelWithString: "seconds")
-        let step5 = NSTextField(labelWithString: "5. Loop back to step 1")
-        [step1, step2, step3, step4, restLoopsLabel, restSecondsLabel, step5].forEach {
+        let step6 = NSTextField(labelWithString: "6. Loop back to step 1")
+        [step1, step2, step3, step4, macroTermSecondsLabel, step5, restLoopsLabel, restSecondsLabel, step6].forEach {
             $0.font = NSFont.systemFont(ofSize: 12, weight: .medium)
             $0.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview($0)
@@ -181,6 +191,13 @@ final class MacroControlWindowManager: NSObject, NSWindowDelegate {
         delayField.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(delayField)
         postDelayField = delayField
+
+        let macroTermField = NSTextField(string: "3.00")
+        macroTermField.placeholderString = "seconds"
+        macroTermField.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        macroTermField.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(macroTermField)
+        macroTermMaxField = macroTermField
 
         let restIntervalField = NSTextField(string: "10")
         restIntervalField.placeholderString = "loops"
@@ -240,26 +257,36 @@ final class MacroControlWindowManager: NSObject, NSWindowDelegate {
 
             step4.topAnchor.constraint(equalTo: step3.bottomAnchor, constant: 10),
             step4.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12),
-            restIntervalField.leadingAnchor.constraint(equalTo: step4.trailingAnchor, constant: 8),
-            restIntervalField.widthAnchor.constraint(equalToConstant: 70),
-            restIntervalField.centerYAnchor.constraint(equalTo: step4.centerYAnchor),
+            macroTermField.leadingAnchor.constraint(equalTo: step4.trailingAnchor, constant: 8),
+            macroTermField.widthAnchor.constraint(equalToConstant: 80),
+            macroTermField.centerYAnchor.constraint(equalTo: step4.centerYAnchor),
 
-            restLoopsLabel.leadingAnchor.constraint(equalTo: restIntervalField.trailingAnchor, constant: 8),
-            restLoopsLabel.centerYAnchor.constraint(equalTo: step4.centerYAnchor),
-
-            restField.leadingAnchor.constraint(equalTo: restLoopsLabel.trailingAnchor, constant: 8),
-            restField.widthAnchor.constraint(equalToConstant: 80),
-            restField.centerYAnchor.constraint(equalTo: step4.centerYAnchor),
-
-            restSecondsLabel.leadingAnchor.constraint(equalTo: restField.trailingAnchor, constant: 8),
-            restSecondsLabel.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor, constant: -12),
-            restSecondsLabel.centerYAnchor.constraint(equalTo: step4.centerYAnchor),
+            macroTermSecondsLabel.leadingAnchor.constraint(equalTo: macroTermField.trailingAnchor, constant: 8),
+            macroTermSecondsLabel.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor, constant: -12),
+            macroTermSecondsLabel.centerYAnchor.constraint(equalTo: step4.centerYAnchor),
 
             step5.topAnchor.constraint(equalTo: step4.bottomAnchor, constant: 10),
             step5.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12),
-            step5.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12),
+            restIntervalField.leadingAnchor.constraint(equalTo: step5.trailingAnchor, constant: 8),
+            restIntervalField.widthAnchor.constraint(equalToConstant: 70),
+            restIntervalField.centerYAnchor.constraint(equalTo: step5.centerYAnchor),
 
-            play.topAnchor.constraint(equalTo: step5.bottomAnchor, constant: 12),
+            restLoopsLabel.leadingAnchor.constraint(equalTo: restIntervalField.trailingAnchor, constant: 8),
+            restLoopsLabel.centerYAnchor.constraint(equalTo: step5.centerYAnchor),
+
+            restField.leadingAnchor.constraint(equalTo: restLoopsLabel.trailingAnchor, constant: 8),
+            restField.widthAnchor.constraint(equalToConstant: 80),
+            restField.centerYAnchor.constraint(equalTo: step5.centerYAnchor),
+
+            restSecondsLabel.leadingAnchor.constraint(equalTo: restField.trailingAnchor, constant: 8),
+            restSecondsLabel.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor, constant: -12),
+            restSecondsLabel.centerYAnchor.constraint(equalTo: step5.centerYAnchor),
+
+            step6.topAnchor.constraint(equalTo: step5.bottomAnchor, constant: 10),
+            step6.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12),
+            step6.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12),
+
+            play.topAnchor.constraint(equalTo: step6.bottomAnchor, constant: 12),
             play.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12),
 
             stop.centerYAnchor.constraint(equalTo: play.centerYAnchor),

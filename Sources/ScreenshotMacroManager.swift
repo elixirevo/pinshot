@@ -9,11 +9,13 @@ final class ScreenshotMacroManager {
     private let afterShortcutDefaultsKey = "macro.afterShortcut"
     private let legacyPreShortcutDefaultsKey = "macro.preShortcut"
     private let postDelayDefaultsKey = "macro.postDelaySeconds"
+    private let macroTermMaxDefaultsKey = "macro.termMaxSeconds"
     private let restLoopIntervalDefaultsKey = "macro.restLoopInterval"
     private let restDurationDefaultsKey = "macro.restDurationSeconds"
 
     private var afterShortcutText: String
     private var postDelaySeconds: TimeInterval
+    private var macroTermMaxSeconds: TimeInterval
     private var restLoopInterval: Int
     private var restDurationSeconds: TimeInterval
     private var currentLoop = 0
@@ -21,7 +23,6 @@ final class ScreenshotMacroManager {
     private var runID = UUID()
     private var pendingWorkItem: DispatchWorkItem?
     private let selfBundleID = Bundle.main.bundleIdentifier ?? "com.elixirevo.PinShot"
-    private let maxRandomAdditionalDelaySeconds: TimeInterval = 2.0
 
     private init() {
         afterShortcutText =
@@ -30,6 +31,8 @@ final class ScreenshotMacroManager {
             ""
         let storedDelay = defaults.object(forKey: postDelayDefaultsKey) as? Double ?? 1.0
         postDelaySeconds = Self.clampDelay(storedDelay)
+        let storedMacroTermMax = defaults.object(forKey: macroTermMaxDefaultsKey) as? Double ?? 3.0
+        macroTermMaxSeconds = Self.clampDelay(storedMacroTermMax)
         let storedRestLoopInterval = defaults.object(forKey: restLoopIntervalDefaultsKey) == nil
             ? 10
             : defaults.integer(forKey: restLoopIntervalDefaultsKey)
@@ -40,13 +43,15 @@ final class ScreenshotMacroManager {
         MacroControlWindowManager.shared.configure(
             afterShortcutText: afterShortcutText,
             postDelaySeconds: postDelaySeconds,
+            macroTermMaxSeconds: macroTermMaxSeconds,
             restLoopInterval: restLoopInterval,
             restDurationSeconds: restDurationSeconds
         )
-        MacroControlWindowManager.shared.onPlayRequested = { [weak self] afterShortcut, postDelay, restLoopInterval, restDuration in
+        MacroControlWindowManager.shared.onPlayRequested = { [weak self] afterShortcut, postDelay, macroTermMax, restLoopInterval, restDuration in
             self?.startPlayback(
                 afterShortcutText: afterShortcut,
                 postDelaySeconds: postDelay,
+                macroTermMaxSeconds: macroTermMax,
                 restLoopInterval: restLoopInterval,
                 restDurationSeconds: restDuration
             )
@@ -61,6 +66,7 @@ final class ScreenshotMacroManager {
         MacroControlWindowManager.shared.configure(
             afterShortcutText: afterShortcutText,
             postDelaySeconds: postDelaySeconds,
+            macroTermMaxSeconds: macroTermMaxSeconds,
             restLoopInterval: restLoopInterval,
             restDurationSeconds: restDurationSeconds
         )
@@ -85,11 +91,16 @@ final class ScreenshotMacroManager {
     private func startPlayback(
         afterShortcutText: String,
         postDelaySeconds: TimeInterval,
+        macroTermMaxSeconds: TimeInterval,
         restLoopInterval: Int,
         restDurationSeconds: TimeInterval
     ) {
         guard let validatedDelay = validateDelay(postDelaySeconds) else {
             showSettingsError("Post delay must be between 0 and 3600 seconds.")
+            return
+        }
+        guard let validatedMacroTermMax = validateDelay(macroTermMaxSeconds) else {
+            showSettingsError("Macro term max must be between 0 and 3600 seconds.")
             return
         }
         guard let validatedRestLoopInterval = validateRestLoopInterval(restLoopInterval) else {
@@ -121,10 +132,12 @@ final class ScreenshotMacroManager {
 
         self.afterShortcutText = trimmed
         self.postDelaySeconds = validatedDelay
+        self.macroTermMaxSeconds = validatedMacroTermMax
         self.restLoopInterval = validatedRestLoopInterval
         self.restDurationSeconds = validatedRestDuration
         defaults.set(trimmed, forKey: afterShortcutDefaultsKey)
         defaults.set(validatedDelay, forKey: postDelayDefaultsKey)
+        defaults.set(validatedMacroTermMax, forKey: macroTermMaxDefaultsKey)
         defaults.set(validatedRestLoopInterval, forKey: restLoopIntervalDefaultsKey)
         defaults.set(validatedRestDuration, forKey: restDurationDefaultsKey)
 
@@ -166,8 +179,14 @@ final class ScreenshotMacroManager {
             }
             self.pendingWorkItem?.cancel()
             self.pendingWorkItem = workItem
-            let randomAdditionalDelay = Double.random(in: 0...self.maxRandomAdditionalDelaySeconds)
-            let restDelay = self.currentLoop.isMultiple(of: self.restLoopInterval) ? self.restDurationSeconds : 0
+            let randomAdditionalDelay = self.randomAdditionalDelay()
+            let restDelay: TimeInterval
+            if self.currentLoop.isMultiple(of: self.restLoopInterval) {
+                let randomRestAdditionalDelay = self.randomAdditionalDelay(excluding: [randomAdditionalDelay])
+                restDelay = self.restDurationSeconds + randomRestAdditionalDelay
+            } else {
+                restDelay = 0
+            }
             let actualDelay = self.postDelaySeconds + randomAdditionalDelay + restDelay
             DispatchQueue.main.asyncAfter(deadline: .now() + actualDelay, execute: workItem)
         }
@@ -203,6 +222,18 @@ final class ScreenshotMacroManager {
         let clamped = Self.clampRestLoopInterval(value)
         guard clamped == value else { return nil }
         return clamped
+    }
+
+    private func randomAdditionalDelay(excluding excludedValues: [TimeInterval] = []) -> TimeInterval {
+        let duplicateTolerance: TimeInterval = 0.000_001
+        for _ in 0..<20 {
+            let value = TimeInterval.random(in: 0...macroTermMaxSeconds)
+            let isDuplicate = excludedValues.contains { abs($0 - value) <= duplicateTolerance }
+            if !isDuplicate {
+                return value
+            }
+        }
+        return TimeInterval.random(in: 0...macroTermMaxSeconds)
     }
 
     private func postShortcut(_ shortcut: HotkeyShortcut) {
