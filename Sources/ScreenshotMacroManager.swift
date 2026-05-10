@@ -12,12 +12,20 @@ final class ScreenshotMacroManager {
     private let macroTermMaxDefaultsKey = "macro.termMaxSeconds"
     private let restLoopIntervalDefaultsKey = "macro.restLoopInterval"
     private let restDurationDefaultsKey = "macro.restDurationSeconds"
+    private let periodicShortcutEnabledDefaultsKey = "macro.periodicShortcutEnabled"
+    private let periodicShortcutDefaultsKey = "macro.periodicShortcut"
+    private let periodicShortcutLoopIntervalDefaultsKey = "macro.periodicShortcutLoopInterval"
+    private let periodicShortcutDelayDefaultsKey = "macro.periodicShortcutDelaySeconds"
 
     private var afterShortcutText: String
     private var postDelaySeconds: TimeInterval
     private var macroTermMaxSeconds: TimeInterval
     private var restLoopInterval: Int
     private var restDurationSeconds: TimeInterval
+    private var periodicShortcutEnabled: Bool
+    private var periodicShortcutText: String
+    private var periodicShortcutLoopInterval: Int
+    private var periodicShortcutDelaySeconds: TimeInterval
     private var currentLoop = 0
     private var isRunning = false
     private var runID = UUID()
@@ -39,22 +47,18 @@ final class ScreenshotMacroManager {
         restLoopInterval = Self.clampRestLoopInterval(storedRestLoopInterval)
         let storedRestDuration = defaults.object(forKey: restDurationDefaultsKey) as? Double ?? 10.0
         restDurationSeconds = Self.clampDelay(storedRestDuration)
+        periodicShortcutEnabled = defaults.bool(forKey: periodicShortcutEnabledDefaultsKey)
+        periodicShortcutText = defaults.string(forKey: periodicShortcutDefaultsKey) ?? ""
+        let storedPeriodicLoopInterval = defaults.object(forKey: periodicShortcutLoopIntervalDefaultsKey) == nil
+            ? 10
+            : defaults.integer(forKey: periodicShortcutLoopIntervalDefaultsKey)
+        periodicShortcutLoopInterval = Self.clampRestLoopInterval(storedPeriodicLoopInterval)
+        let storedPeriodicDelay = defaults.object(forKey: periodicShortcutDelayDefaultsKey) as? Double ?? 1.0
+        periodicShortcutDelaySeconds = Self.clampDelay(storedPeriodicDelay)
 
-        MacroControlWindowManager.shared.configure(
-            afterShortcutText: afterShortcutText,
-            postDelaySeconds: postDelaySeconds,
-            macroTermMaxSeconds: macroTermMaxSeconds,
-            restLoopInterval: restLoopInterval,
-            restDurationSeconds: restDurationSeconds
-        )
-        MacroControlWindowManager.shared.onPlayRequested = { [weak self] afterShortcut, postDelay, macroTermMax, restLoopInterval, restDuration in
-            self?.startPlayback(
-                afterShortcutText: afterShortcut,
-                postDelaySeconds: postDelay,
-                macroTermMaxSeconds: macroTermMax,
-                restLoopInterval: restLoopInterval,
-                restDurationSeconds: restDuration
-            )
+        MacroControlWindowManager.shared.configure(settings: currentSettings)
+        MacroControlWindowManager.shared.onPlayRequested = { [weak self] settings in
+            self?.startPlayback(settings: settings)
         }
         MacroControlWindowManager.shared.onStopRequested = { [weak self] in
             self?.stopPlayback(hideWindow: false)
@@ -63,13 +67,7 @@ final class ScreenshotMacroManager {
     }
 
     func showControlWindow(below region: NSRect) {
-        MacroControlWindowManager.shared.configure(
-            afterShortcutText: afterShortcutText,
-            postDelaySeconds: postDelaySeconds,
-            macroTermMaxSeconds: macroTermMaxSeconds,
-            restLoopInterval: restLoopInterval,
-            restDurationSeconds: restDurationSeconds
-        )
+        MacroControlWindowManager.shared.configure(settings: currentSettings)
         MacroControlWindowManager.shared.updatePlaybackState(isRunning: isRunning, iteration: currentLoop)
         MacroControlWindowManager.shared.show(below: region)
     }
@@ -88,31 +86,39 @@ final class ScreenshotMacroManager {
         }
     }
 
-    private func startPlayback(
-        afterShortcutText: String,
-        postDelaySeconds: TimeInterval,
-        macroTermMaxSeconds: TimeInterval,
-        restLoopInterval: Int,
-        restDurationSeconds: TimeInterval
-    ) {
-        guard let validatedDelay = validateDelay(postDelaySeconds) else {
+    private var currentSettings: MacroPlaybackSettings {
+        MacroPlaybackSettings(
+            afterShortcutText: afterShortcutText,
+            postDelaySeconds: postDelaySeconds,
+            macroTermMaxSeconds: macroTermMaxSeconds,
+            restLoopInterval: restLoopInterval,
+            restDurationSeconds: restDurationSeconds,
+            periodicShortcutEnabled: periodicShortcutEnabled,
+            periodicShortcutText: periodicShortcutText,
+            periodicShortcutLoopInterval: periodicShortcutLoopInterval,
+            periodicShortcutDelaySeconds: periodicShortcutDelaySeconds
+        )
+    }
+
+    private func startPlayback(settings: MacroPlaybackSettings) {
+        guard let validatedDelay = validateDelay(settings.postDelaySeconds) else {
             showSettingsError("Post delay must be between 0 and 3600 seconds.")
             return
         }
-        guard let validatedMacroTermMax = validateDelay(macroTermMaxSeconds) else {
+        guard let validatedMacroTermMax = validateDelay(settings.macroTermMaxSeconds) else {
             showSettingsError("Macro term max must be between 0 and 3600 seconds.")
             return
         }
-        guard let validatedRestLoopInterval = validateRestLoopInterval(restLoopInterval) else {
+        guard let validatedRestLoopInterval = validateRestLoopInterval(settings.restLoopInterval) else {
             showSettingsError("Rest loop interval must be between 1 and 1,000,000.")
             return
         }
-        guard let validatedRestDuration = validateDelay(restDurationSeconds) else {
+        guard let validatedRestDuration = validateDelay(settings.restDurationSeconds) else {
             showSettingsError("Rest duration must be between 0 and 3600 seconds.")
             return
         }
 
-        let trimmed = afterShortcutText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = settings.afterShortcutText.trimmingCharacters(in: .whitespacesAndNewlines)
         let parsedAfterShortcut: HotkeyShortcut?
         if trimmed.isEmpty {
             parsedAfterShortcut = nil
@@ -130,16 +136,62 @@ final class ScreenshotMacroManager {
             }
         }
 
+        let trimmedPeriodicShortcut = settings.periodicShortcutText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let validatedPeriodicLoopInterval: Int
+        let validatedPeriodicDelay: TimeInterval
+        let parsedPeriodicShortcut: HotkeyShortcut?
+        if settings.periodicShortcutEnabled {
+            guard let loopInterval = validateRestLoopInterval(settings.periodicShortcutLoopInterval) else {
+                showSettingsError("Periodic shortcut loop interval must be between 1 and 1,000,000.")
+                return
+            }
+            guard let delay = validateDelay(settings.periodicShortcutDelaySeconds) else {
+                showSettingsError("Periodic shortcut wait must be between 0 and 3600 seconds.")
+                return
+            }
+            guard !trimmedPeriodicShortcut.isEmpty else {
+                showSettingsError("Periodic shortcut is enabled, so enter a shortcut.")
+                return
+            }
+            do {
+                let parsed = try HotkeyShortcut.parse(trimmedPeriodicShortcut)
+                if parsed == HotkeyManager.shared.shortcut(for: .saveScreenshot) {
+                    showSettingsError("Periodic shortcut cannot be the same as the screenshot shortcut.")
+                    return
+                }
+                parsedPeriodicShortcut = parsed
+            } catch {
+                showSettingsError("Invalid periodic shortcut. Example: command+r, option+right, left")
+                return
+            }
+            validatedPeriodicLoopInterval = loopInterval
+            validatedPeriodicDelay = delay
+        } else {
+            validatedPeriodicLoopInterval =
+                validateRestLoopInterval(settings.periodicShortcutLoopInterval) ?? periodicShortcutLoopInterval
+            validatedPeriodicDelay =
+                validateDelay(settings.periodicShortcutDelaySeconds) ?? periodicShortcutDelaySeconds
+            parsedPeriodicShortcut = nil
+        }
+
         self.afterShortcutText = trimmed
         self.postDelaySeconds = validatedDelay
         self.macroTermMaxSeconds = validatedMacroTermMax
         self.restLoopInterval = validatedRestLoopInterval
         self.restDurationSeconds = validatedRestDuration
+        self.periodicShortcutEnabled = settings.periodicShortcutEnabled
+        self.periodicShortcutText = trimmedPeriodicShortcut
+        self.periodicShortcutLoopInterval = validatedPeriodicLoopInterval
+        self.periodicShortcutDelaySeconds = validatedPeriodicDelay
         defaults.set(trimmed, forKey: afterShortcutDefaultsKey)
         defaults.set(validatedDelay, forKey: postDelayDefaultsKey)
         defaults.set(validatedMacroTermMax, forKey: macroTermMaxDefaultsKey)
         defaults.set(validatedRestLoopInterval, forKey: restLoopIntervalDefaultsKey)
         defaults.set(validatedRestDuration, forKey: restDurationDefaultsKey)
+        defaults.set(settings.periodicShortcutEnabled, forKey: periodicShortcutEnabledDefaultsKey)
+        defaults.set(trimmedPeriodicShortcut, forKey: periodicShortcutDefaultsKey)
+        defaults.set(validatedPeriodicLoopInterval, forKey: periodicShortcutLoopIntervalDefaultsKey)
+        defaults.set(validatedPeriodicDelay, forKey: periodicShortcutDelayDefaultsKey)
 
         guard !isRunning else { return }
         guard ScreenshotSaveManager.shared.savedRegionScreenRect() != nil else {
@@ -151,10 +203,10 @@ final class ScreenshotMacroManager {
         currentLoop = 0
         runID = UUID()
         MacroControlWindowManager.shared.updatePlaybackState(isRunning: true, iteration: currentLoop)
-        runNextLoop(afterShortcut: parsedAfterShortcut, runID: runID)
+        runNextLoop(afterShortcut: parsedAfterShortcut, periodicShortcut: parsedPeriodicShortcut, runID: runID)
     }
 
-    private func runNextLoop(afterShortcut: HotkeyShortcut?, runID: UUID) {
+    private func runNextLoop(afterShortcut: HotkeyShortcut?, periodicShortcut: HotkeyShortcut?, runID: UUID) {
         guard isRunning, self.runID == runID else { return }
 
         ScreenshotSaveManager.shared.captureUsingSavedRegion(showPersistentIndicator: true) { [weak self] success, _ in
@@ -174,11 +226,6 @@ final class ScreenshotMacroManager {
             self.currentLoop += 1
             MacroControlWindowManager.shared.updatePlaybackState(isRunning: true, iteration: self.currentLoop)
 
-            let workItem = DispatchWorkItem { [weak self] in
-                self?.runNextLoop(afterShortcut: afterShortcut, runID: runID)
-            }
-            self.pendingWorkItem?.cancel()
-            self.pendingWorkItem = workItem
             let randomAdditionalDelay = self.randomAdditionalDelay()
             let restDelay: TimeInterval
             if self.currentLoop.isMultiple(of: self.restLoopInterval) {
@@ -187,9 +234,44 @@ final class ScreenshotMacroManager {
             } else {
                 restDelay = 0
             }
-            let actualDelay = self.postDelaySeconds + randomAdditionalDelay + restDelay
-            DispatchQueue.main.asyncAfter(deadline: .now() + actualDelay, execute: workItem)
+            let delayBeforePeriodicShortcut = self.postDelaySeconds + randomAdditionalDelay + restDelay
+
+            self.scheduleMacroStep(after: delayBeforePeriodicShortcut, runID: runID) { manager in
+                if let periodicShortcut,
+                   manager.periodicShortcutEnabled,
+                   manager.currentLoop.isMultiple(of: manager.periodicShortcutLoopInterval) {
+                    manager.postShortcut(periodicShortcut)
+                    manager.scheduleMacroStep(after: manager.periodicShortcutDelaySeconds, runID: runID) { manager in
+                        manager.runNextLoop(
+                            afterShortcut: afterShortcut,
+                            periodicShortcut: periodicShortcut,
+                            runID: runID
+                        )
+                    }
+                } else {
+                    manager.runNextLoop(
+                        afterShortcut: afterShortcut,
+                        periodicShortcut: periodicShortcut,
+                        runID: runID
+                    )
+                }
+            }
         }
+    }
+
+    private func scheduleMacroStep(
+        after delay: TimeInterval,
+        runID: UUID,
+        _ action: @escaping (ScreenshotMacroManager) -> Void
+    ) {
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            guard self.isRunning, self.runID == runID else { return }
+            action(self)
+        }
+        pendingWorkItem?.cancel()
+        pendingWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
     }
 
     private func stopPlayback(hideWindow: Bool) {

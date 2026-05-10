@@ -18,7 +18,7 @@
 * **Quick Save Screenshot:** Press `Option + 2` to save a screenshot to `~/Pictures/PinShotCaptures` and reuse the last selected region.
 * **Region Overlay Preview:** When you save with `Option + 2`, the saved area stays highlighted until you press `Esc`.
 * **Pixel Magnifier:** While selecting a save region, a zoom lens shows cursor-adjacent pixels with pixel coordinates.
-* **Opt+2 Macro Panel:** With `Option + 2`, a macro panel appears below the region so you can run a loop: screenshot -> after-shortcut -> post-delay -> configurable rest -> repeat.
+* **Opt+2 Macro Panel:** With `Option + 2`, a macro panel appears below the region so you can run a loop: screenshot -> after-shortcut -> post-delay -> configurable rest -> optional periodic shortcut -> repeat.
 * **Lightweight & Native:** Built purely with Swift and AppKit (No Electron, minimal resource usage).
 
 ## ⌨️ Shortcuts

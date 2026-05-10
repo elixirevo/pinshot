@@ -1,11 +1,28 @@
 import Cocoa
 import Carbon
 
+struct MacroPlaybackSettings {
+    let afterShortcutText: String
+    let postDelaySeconds: TimeInterval
+    let macroTermMaxSeconds: TimeInterval
+    let restLoopInterval: Int
+    let restDurationSeconds: TimeInterval
+    let periodicShortcutEnabled: Bool
+    let periodicShortcutText: String
+    let periodicShortcutLoopInterval: Int
+    let periodicShortcutDelaySeconds: TimeInterval
+}
+
 final class MacroControlWindowManager: NSObject, NSWindowDelegate {
     static let shared = MacroControlWindowManager()
 
-    var onPlayRequested: ((String, TimeInterval, TimeInterval, Int, TimeInterval) -> Void)?
+    var onPlayRequested: ((MacroPlaybackSettings) -> Void)?
     var onStopRequested: (() -> Void)?
+
+    private enum ShortcutCaptureTarget {
+        case afterScreenshot
+        case periodicShortcut
+    }
 
     private var window: NSPanel?
     private var afterShortcutField: NSTextField?
@@ -13,39 +30,47 @@ final class MacroControlWindowManager: NSObject, NSWindowDelegate {
     private var macroTermMaxField: NSTextField?
     private var restLoopIntervalField: NSTextField?
     private var restDurationField: NSTextField?
+    private var periodicShortcutEnabledCheckbox: NSButton?
+    private var periodicShortcutLoopIntervalField: NSTextField?
+    private var periodicShortcutField: NSTextField?
+    private var periodicShortcutDelayField: NSTextField?
     private var playButton: NSButton?
     private var stopButton: NSButton?
     private var readKeyButton: NSButton?
+    private var readPeriodicKeyButton: NSButton?
     private var statusLabel: NSTextField?
     private let defaults = UserDefaults.standard
     private let windowOriginXDefaultsKey = "macro.windowOrigin.x"
     private let windowOriginYDefaultsKey = "macro.windowOrigin.y"
     private var hasUserPinnedPosition = false
     private var isProgrammaticMoveInProgress = false
-    private var isReadingKey = false
+    private var readingShortcutTarget: ShortcutCaptureTarget?
     private var localReadKeyMonitor: Any?
     private var globalReadKeyMonitor: Any?
     private var lastPlaybackIsRunning = false
     private var lastPlaybackIteration = 0
 
+    private var isReadingKey: Bool {
+        readingShortcutTarget != nil
+    }
+
     private override init() {
         super.init()
     }
 
-    func configure(
-        afterShortcutText: String,
-        postDelaySeconds: TimeInterval,
-        macroTermMaxSeconds: TimeInterval,
-        restLoopInterval: Int,
-        restDurationSeconds: TimeInterval
-    ) {
+    func configure(settings: MacroPlaybackSettings) {
         DispatchQueue.main.async {
             self.ensureWindow()
-            self.afterShortcutField?.stringValue = afterShortcutText
-            self.postDelayField?.stringValue = String(format: "%.2f", postDelaySeconds)
-            self.macroTermMaxField?.stringValue = String(format: "%.2f", macroTermMaxSeconds)
-            self.restLoopIntervalField?.stringValue = "\(restLoopInterval)"
-            self.restDurationField?.stringValue = String(format: "%.2f", restDurationSeconds)
+            self.afterShortcutField?.stringValue = settings.afterShortcutText
+            self.postDelayField?.stringValue = String(format: "%.2f", settings.postDelaySeconds)
+            self.macroTermMaxField?.stringValue = String(format: "%.2f", settings.macroTermMaxSeconds)
+            self.restLoopIntervalField?.stringValue = "\(settings.restLoopInterval)"
+            self.restDurationField?.stringValue = String(format: "%.2f", settings.restDurationSeconds)
+            self.periodicShortcutEnabledCheckbox?.state = settings.periodicShortcutEnabled ? .on : .off
+            self.periodicShortcutLoopIntervalField?.stringValue = "\(settings.periodicShortcutLoopInterval)"
+            self.periodicShortcutField?.stringValue = settings.periodicShortcutText
+            self.periodicShortcutDelayField?.stringValue = String(format: "%.2f", settings.periodicShortcutDelaySeconds)
+            self.refreshControlStates()
         }
     }
 
@@ -70,9 +95,7 @@ final class MacroControlWindowManager: NSObject, NSWindowDelegate {
         DispatchQueue.main.async {
             self.lastPlaybackIsRunning = isRunning
             self.lastPlaybackIteration = iteration
-            self.playButton?.isEnabled = !isRunning && !self.isReadingKey
-            self.stopButton?.isEnabled = isRunning
-            self.readKeyButton?.isEnabled = !isRunning || self.isReadingKey
+            self.refreshControlStates()
             if !self.isReadingKey {
                 self.refreshStatusText()
             }
@@ -101,11 +124,16 @@ final class MacroControlWindowManager: NSObject, NSWindowDelegate {
 
     @objc private func playClicked() {
         guard let postDelayField, let macroTermMaxField, let restLoopIntervalField, let restDurationField else { return }
+        guard let periodicShortcutEnabledCheckbox, let periodicShortcutLoopIntervalField, let periodicShortcutDelayField else { return }
         let afterShortcutText = afterShortcutField?.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let delayText = postDelayField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let macroTermMaxText = macroTermMaxField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let restLoopIntervalText = restLoopIntervalField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let restDurationText = restDurationField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let periodicEnabled = periodicShortcutEnabledCheckbox.state == .on
+        let periodicShortcutText = periodicShortcutField?.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let periodicLoopIntervalText = periodicShortcutLoopIntervalField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let periodicDelayText = periodicShortcutDelayField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard let delay = TimeInterval(delayText), delay.isFinite, delay >= 0 else {
             showValidationError("Post delay must be a number >= 0.")
@@ -123,7 +151,42 @@ final class MacroControlWindowManager: NSObject, NSWindowDelegate {
             showValidationError("Rest duration must be a number >= 0.")
             return
         }
-        onPlayRequested?(afterShortcutText, delay, macroTermMax, restLoopInterval, restDuration)
+
+        let periodicLoopInterval: Int
+        let periodicDelay: TimeInterval
+        if periodicEnabled {
+            guard !periodicShortcutText.isEmpty else {
+                showValidationError("Periodic shortcut is enabled, so enter a shortcut.")
+                return
+            }
+            guard let parsedLoopInterval = Int(periodicLoopIntervalText), parsedLoopInterval > 0 else {
+                showValidationError("Periodic shortcut loop interval must be an integer >= 1.")
+                return
+            }
+            guard let parsedDelay = TimeInterval(periodicDelayText), parsedDelay.isFinite, parsedDelay >= 0 else {
+                showValidationError("Periodic shortcut wait must be a number >= 0.")
+                return
+            }
+            periodicLoopInterval = parsedLoopInterval
+            periodicDelay = parsedDelay
+        } else {
+            periodicLoopInterval = Int(periodicLoopIntervalText) ?? 1
+            periodicDelay = TimeInterval(periodicDelayText) ?? 0
+        }
+
+        onPlayRequested?(
+            MacroPlaybackSettings(
+                afterShortcutText: afterShortcutText,
+                postDelaySeconds: delay,
+                macroTermMaxSeconds: macroTermMax,
+                restLoopInterval: restLoopInterval,
+                restDurationSeconds: restDuration,
+                periodicShortcutEnabled: periodicEnabled,
+                periodicShortcutText: periodicShortcutText,
+                periodicShortcutLoopInterval: periodicLoopInterval,
+                periodicShortcutDelaySeconds: periodicDelay
+            )
+        )
     }
 
     @objc private func stopClicked() {
@@ -131,18 +194,30 @@ final class MacroControlWindowManager: NSObject, NSWindowDelegate {
     }
 
     @objc private func readKeyClicked() {
-        if isReadingKey {
+        if readingShortcutTarget == .afterScreenshot {
             stopReadingShortcutCapture(updateStatus: true)
             return
         }
-        startReadingShortcutCapture()
+        startReadingShortcutCapture(target: .afterScreenshot)
+    }
+
+    @objc private func readPeriodicKeyClicked() {
+        if readingShortcutTarget == .periodicShortcut {
+            stopReadingShortcutCapture(updateStatus: true)
+            return
+        }
+        startReadingShortcutCapture(target: .periodicShortcut)
+    }
+
+    @objc private func periodicEnabledChanged() {
+        refreshControlStates()
     }
 
     private func ensureWindow() {
         guard window == nil else { return }
 
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 315),
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 430),
             styleMask: [.titled, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -165,8 +240,16 @@ final class MacroControlWindowManager: NSObject, NSWindowDelegate {
         let step5 = NSTextField(labelWithString: "5. Rest every")
         let restLoopsLabel = NSTextField(labelWithString: "loops for")
         let restSecondsLabel = NSTextField(labelWithString: "seconds")
-        let step6 = NSTextField(labelWithString: "6. Loop back to step 1")
-        [step1, step2, step3, step4, macroTermSecondsLabel, step5, restLoopsLabel, restSecondsLabel, step6].forEach {
+        let step6 = NSTextField(labelWithString: "6. Periodic shortcut after rest")
+        let periodicEveryLabel = NSTextField(labelWithString: "every")
+        let periodicLoopsLabel = NSTextField(labelWithString: "loops")
+        let periodicWaitLabel = NSTextField(labelWithString: "After shortcut: wait")
+        let periodicWaitSecondsLabel = NSTextField(labelWithString: "seconds")
+        let step7 = NSTextField(labelWithString: "7. Loop back to step 1")
+        [
+            step1, step2, step3, step4, macroTermSecondsLabel, step5, restLoopsLabel, restSecondsLabel,
+            step6, periodicEveryLabel, periodicLoopsLabel, periodicWaitLabel, periodicWaitSecondsLabel, step7
+        ].forEach {
             $0.font = NSFont.systemFont(ofSize: 12, weight: .medium)
             $0.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview($0)
@@ -212,6 +295,38 @@ final class MacroControlWindowManager: NSObject, NSWindowDelegate {
         restField.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(restField)
         restDurationField = restField
+
+        let periodicEnabled = NSButton(checkboxWithTitle: "Enable", target: self, action: #selector(periodicEnabledChanged))
+        periodicEnabled.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(periodicEnabled)
+        periodicShortcutEnabledCheckbox = periodicEnabled
+
+        let periodicIntervalField = NSTextField(string: "10")
+        periodicIntervalField.placeholderString = "loops"
+        periodicIntervalField.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        periodicIntervalField.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(periodicIntervalField)
+        periodicShortcutLoopIntervalField = periodicIntervalField
+
+        let periodicField = NSTextField(string: "")
+        periodicField.placeholderString = "ex) command+r, option+right"
+        periodicField.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        periodicField.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(periodicField)
+        periodicShortcutField = periodicField
+
+        let readPeriodicButton = NSButton(title: "Read Key", target: self, action: #selector(readPeriodicKeyClicked))
+        readPeriodicButton.bezelStyle = .rounded
+        readPeriodicButton.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(readPeriodicButton)
+        readPeriodicKeyButton = readPeriodicButton
+
+        let periodicDelayField = NSTextField(string: "1.00")
+        periodicDelayField.placeholderString = "seconds"
+        periodicDelayField.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        periodicDelayField.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(periodicDelayField)
+        periodicShortcutDelayField = periodicDelayField
 
         let play = NSButton(title: "Play Macro", target: self, action: #selector(playClicked))
         play.bezelStyle = .rounded
@@ -286,7 +401,44 @@ final class MacroControlWindowManager: NSObject, NSWindowDelegate {
             step6.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12),
             step6.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12),
 
-            play.topAnchor.constraint(equalTo: step6.bottomAnchor, constant: 12),
+            periodicEnabled.topAnchor.constraint(equalTo: step6.bottomAnchor, constant: 8),
+            periodicEnabled.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12),
+
+            periodicEveryLabel.leadingAnchor.constraint(equalTo: periodicEnabled.trailingAnchor, constant: 12),
+            periodicEveryLabel.centerYAnchor.constraint(equalTo: periodicEnabled.centerYAnchor),
+
+            periodicIntervalField.leadingAnchor.constraint(equalTo: periodicEveryLabel.trailingAnchor, constant: 8),
+            periodicIntervalField.widthAnchor.constraint(equalToConstant: 70),
+            periodicIntervalField.centerYAnchor.constraint(equalTo: periodicEnabled.centerYAnchor),
+
+            periodicLoopsLabel.leadingAnchor.constraint(equalTo: periodicIntervalField.trailingAnchor, constant: 8),
+            periodicLoopsLabel.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor, constant: -12),
+            periodicLoopsLabel.centerYAnchor.constraint(equalTo: periodicEnabled.centerYAnchor),
+
+            periodicField.topAnchor.constraint(equalTo: periodicEnabled.bottomAnchor, constant: 6),
+            periodicField.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12),
+            periodicField.trailingAnchor.constraint(equalTo: readPeriodicButton.leadingAnchor, constant: -8),
+
+            readPeriodicButton.centerYAnchor.constraint(equalTo: periodicField.centerYAnchor),
+            readPeriodicButton.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12),
+            readPeriodicButton.widthAnchor.constraint(equalToConstant: 92),
+
+            periodicWaitLabel.topAnchor.constraint(equalTo: periodicField.bottomAnchor, constant: 8),
+            periodicWaitLabel.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12),
+
+            periodicDelayField.leadingAnchor.constraint(equalTo: periodicWaitLabel.trailingAnchor, constant: 8),
+            periodicDelayField.widthAnchor.constraint(equalToConstant: 80),
+            periodicDelayField.centerYAnchor.constraint(equalTo: periodicWaitLabel.centerYAnchor),
+
+            periodicWaitSecondsLabel.leadingAnchor.constraint(equalTo: periodicDelayField.trailingAnchor, constant: 8),
+            periodicWaitSecondsLabel.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor, constant: -12),
+            periodicWaitSecondsLabel.centerYAnchor.constraint(equalTo: periodicWaitLabel.centerYAnchor),
+
+            step7.topAnchor.constraint(equalTo: periodicWaitLabel.bottomAnchor, constant: 10),
+            step7.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12),
+            step7.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12),
+
+            play.topAnchor.constraint(equalTo: step7.bottomAnchor, constant: 12),
             play.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12),
 
             stop.centerYAnchor.constraint(equalTo: play.centerYAnchor),
@@ -323,13 +475,15 @@ final class MacroControlWindowManager: NSObject, NSWindowDelegate {
         alert.runModal()
     }
 
-    private func startReadingShortcutCapture() {
-        guard !isReadingKey else { return }
+    private func startReadingShortcutCapture(target: ShortcutCaptureTarget) {
         guard !lastPlaybackIsRunning else { return }
 
-        isReadingKey = true
-        readKeyButton?.title = "Cancel Read"
-        playButton?.isEnabled = false
+        if isReadingKey {
+            stopReadingShortcutCapture(updateStatus: false)
+        }
+
+        readingShortcutTarget = target
+        refreshControlStates()
         statusLabel?.stringValue = "Reading key... (Esc to cancel)"
 
         localReadKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
@@ -350,10 +504,8 @@ final class MacroControlWindowManager: NSObject, NSWindowDelegate {
             NSEvent.removeMonitor(globalReadKeyMonitor)
             self.globalReadKeyMonitor = nil
         }
-        isReadingKey = false
-        readKeyButton?.title = "Read Key"
-        playButton?.isEnabled = !lastPlaybackIsRunning
-        readKeyButton?.isEnabled = !lastPlaybackIsRunning
+        readingShortcutTarget = nil
+        refreshControlStates()
         if updateStatus {
             refreshStatusText()
         }
@@ -370,7 +522,14 @@ final class MacroControlWindowManager: NSObject, NSWindowDelegate {
 
             do {
                 let shortcut = try HotkeyShortcut.from(event: event)
-                self.afterShortcutField?.stringValue = shortcut.editableString
+                switch self.readingShortcutTarget {
+                case .afterScreenshot:
+                    self.afterShortcutField?.stringValue = shortcut.editableString
+                case .periodicShortcut:
+                    self.periodicShortcutField?.stringValue = shortcut.editableString
+                case nil:
+                    return
+                }
                 self.stopReadingShortcutCapture(updateStatus: false)
                 self.statusLabel?.stringValue = "Key set: \(shortcut.displayString)"
             } catch {
@@ -385,6 +544,27 @@ final class MacroControlWindowManager: NSObject, NSWindowDelegate {
         } else {
             statusLabel?.stringValue = "Stopped (Last loop \(lastPlaybackIteration))"
         }
+    }
+
+    private func refreshControlStates() {
+        let isReadingAfter = readingShortcutTarget == .afterScreenshot
+        let isReadingPeriodic = readingShortcutTarget == .periodicShortcut
+        let isPeriodicEnabled = periodicShortcutEnabledCheckbox?.state == .on
+
+        playButton?.isEnabled = !lastPlaybackIsRunning && !isReadingKey
+        stopButton?.isEnabled = lastPlaybackIsRunning
+
+        periodicShortcutEnabledCheckbox?.isEnabled = !lastPlaybackIsRunning && !isReadingKey
+
+        readKeyButton?.title = isReadingAfter ? "Cancel Read" : "Read Key"
+        readKeyButton?.isEnabled = !lastPlaybackIsRunning && (!isReadingKey || isReadingAfter)
+
+        readPeriodicKeyButton?.title = isReadingPeriodic ? "Cancel Read" : "Read Key"
+        readPeriodicKeyButton?.isEnabled = !lastPlaybackIsRunning && isPeriodicEnabled && (!isReadingKey || isReadingPeriodic)
+
+        periodicShortcutLoopIntervalField?.isEnabled = isPeriodicEnabled && !lastPlaybackIsRunning
+        periodicShortcutField?.isEnabled = isPeriodicEnabled && !lastPlaybackIsRunning
+        periodicShortcutDelayField?.isEnabled = isPeriodicEnabled && !lastPlaybackIsRunning
     }
 
     func windowDidMove(_ notification: Notification) {
