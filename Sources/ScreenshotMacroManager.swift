@@ -12,6 +12,7 @@ final class ScreenshotMacroManager {
     private let macroTermMaxDefaultsKey = "macro.termMaxSeconds"
     private let restLoopIntervalDefaultsKey = "macro.restLoopInterval"
     private let restDurationDefaultsKey = "macro.restDurationSeconds"
+    private let maxLoopCountDefaultsKey = "macro.maxLoopCount"
     private let periodicShortcutEnabledDefaultsKey = "macro.periodicShortcutEnabled"
     private let periodicShortcutDefaultsKey = "macro.periodicShortcut"
     private let periodicShortcutLoopIntervalDefaultsKey = "macro.periodicShortcutLoopInterval"
@@ -22,6 +23,7 @@ final class ScreenshotMacroManager {
     private var macroTermMaxSeconds: TimeInterval
     private var restLoopInterval: Int
     private var restDurationSeconds: TimeInterval
+    private var maxLoopCount: Int
     private var periodicShortcutEnabled: Bool
     private var periodicShortcutText: String
     private var periodicShortcutLoopInterval: Int
@@ -47,6 +49,10 @@ final class ScreenshotMacroManager {
         restLoopInterval = Self.clampRestLoopInterval(storedRestLoopInterval)
         let storedRestDuration = defaults.object(forKey: restDurationDefaultsKey) as? Double ?? 10.0
         restDurationSeconds = Self.clampDelay(storedRestDuration)
+        let storedMaxLoopCount = defaults.object(forKey: maxLoopCountDefaultsKey) == nil
+            ? 0
+            : defaults.integer(forKey: maxLoopCountDefaultsKey)
+        maxLoopCount = Self.clampMaxLoopCount(storedMaxLoopCount)
         periodicShortcutEnabled = defaults.bool(forKey: periodicShortcutEnabledDefaultsKey)
         periodicShortcutText = defaults.string(forKey: periodicShortcutDefaultsKey) ?? ""
         let storedPeriodicLoopInterval = defaults.object(forKey: periodicShortcutLoopIntervalDefaultsKey) == nil
@@ -93,6 +99,7 @@ final class ScreenshotMacroManager {
             macroTermMaxSeconds: macroTermMaxSeconds,
             restLoopInterval: restLoopInterval,
             restDurationSeconds: restDurationSeconds,
+            maxLoopCount: maxLoopCount,
             periodicShortcutEnabled: periodicShortcutEnabled,
             periodicShortcutText: periodicShortcutText,
             periodicShortcutLoopInterval: periodicShortcutLoopInterval,
@@ -115,6 +122,10 @@ final class ScreenshotMacroManager {
         }
         guard let validatedRestDuration = validateDelay(settings.restDurationSeconds) else {
             showSettingsError("Rest duration must be between 0 and 3600 seconds.")
+            return
+        }
+        guard let validatedMaxLoopCount = validateMaxLoopCount(settings.maxLoopCount) else {
+            showSettingsError("Maximum loops must be between 0 and 1,000,000. Use 0 for unlimited.")
             return
         }
 
@@ -179,6 +190,7 @@ final class ScreenshotMacroManager {
         self.macroTermMaxSeconds = validatedMacroTermMax
         self.restLoopInterval = validatedRestLoopInterval
         self.restDurationSeconds = validatedRestDuration
+        self.maxLoopCount = validatedMaxLoopCount
         self.periodicShortcutEnabled = settings.periodicShortcutEnabled
         self.periodicShortcutText = trimmedPeriodicShortcut
         self.periodicShortcutLoopInterval = validatedPeriodicLoopInterval
@@ -188,6 +200,7 @@ final class ScreenshotMacroManager {
         defaults.set(validatedMacroTermMax, forKey: macroTermMaxDefaultsKey)
         defaults.set(validatedRestLoopInterval, forKey: restLoopIntervalDefaultsKey)
         defaults.set(validatedRestDuration, forKey: restDurationDefaultsKey)
+        defaults.set(validatedMaxLoopCount, forKey: maxLoopCountDefaultsKey)
         defaults.set(settings.periodicShortcutEnabled, forKey: periodicShortcutEnabledDefaultsKey)
         defaults.set(trimmedPeriodicShortcut, forKey: periodicShortcutDefaultsKey)
         defaults.set(validatedPeriodicLoopInterval, forKey: periodicShortcutLoopIntervalDefaultsKey)
@@ -225,6 +238,11 @@ final class ScreenshotMacroManager {
 
             self.currentLoop += 1
             MacroControlWindowManager.shared.updatePlaybackState(isRunning: true, iteration: self.currentLoop)
+
+            if self.maxLoopCount > 0, self.currentLoop >= self.maxLoopCount {
+                self.stopPlayback(hideWindow: false)
+                return
+            }
 
             let randomAdditionalDelay = self.randomAdditionalDelay()
             let restDelay: TimeInterval
@@ -293,6 +311,10 @@ final class ScreenshotMacroManager {
         min(max(value, 1), 1_000_000)
     }
 
+    private static func clampMaxLoopCount(_ value: Int) -> Int {
+        min(max(value, 0), 1_000_000)
+    }
+
     private func validateDelay(_ value: TimeInterval) -> TimeInterval? {
         guard value.isFinite else { return nil }
         let clamped = Self.clampDelay(value)
@@ -302,6 +324,12 @@ final class ScreenshotMacroManager {
 
     private func validateRestLoopInterval(_ value: Int) -> Int? {
         let clamped = Self.clampRestLoopInterval(value)
+        guard clamped == value else { return nil }
+        return clamped
+    }
+
+    private func validateMaxLoopCount(_ value: Int) -> Int? {
+        let clamped = Self.clampMaxLoopCount(value)
         guard clamped == value else { return nil }
         return clamped
     }

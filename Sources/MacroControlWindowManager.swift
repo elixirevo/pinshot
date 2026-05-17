@@ -7,6 +7,7 @@ struct MacroPlaybackSettings {
     let macroTermMaxSeconds: TimeInterval
     let restLoopInterval: Int
     let restDurationSeconds: TimeInterval
+    let maxLoopCount: Int
     let periodicShortcutEnabled: Bool
     let periodicShortcutText: String
     let periodicShortcutLoopInterval: Int
@@ -30,6 +31,7 @@ final class MacroControlWindowManager: NSObject, NSWindowDelegate {
     private var macroTermMaxField: NSTextField?
     private var restLoopIntervalField: NSTextField?
     private var restDurationField: NSTextField?
+    private var maxLoopCountField: NSTextField?
     private var periodicShortcutEnabledCheckbox: NSButton?
     private var periodicShortcutLoopIntervalField: NSTextField?
     private var periodicShortcutField: NSTextField?
@@ -66,6 +68,7 @@ final class MacroControlWindowManager: NSObject, NSWindowDelegate {
             self.macroTermMaxField?.stringValue = String(format: "%.2f", settings.macroTermMaxSeconds)
             self.restLoopIntervalField?.stringValue = "\(settings.restLoopInterval)"
             self.restDurationField?.stringValue = String(format: "%.2f", settings.restDurationSeconds)
+            self.maxLoopCountField?.stringValue = "\(settings.maxLoopCount)"
             self.periodicShortcutEnabledCheckbox?.state = settings.periodicShortcutEnabled ? .on : .off
             self.periodicShortcutLoopIntervalField?.stringValue = "\(settings.periodicShortcutLoopInterval)"
             self.periodicShortcutField?.stringValue = settings.periodicShortcutText
@@ -123,13 +126,14 @@ final class MacroControlWindowManager: NSObject, NSWindowDelegate {
     }
 
     @objc private func playClicked() {
-        guard let postDelayField, let macroTermMaxField, let restLoopIntervalField, let restDurationField else { return }
+        guard let postDelayField, let macroTermMaxField, let restLoopIntervalField, let restDurationField, let maxLoopCountField else { return }
         guard let periodicShortcutEnabledCheckbox, let periodicShortcutLoopIntervalField, let periodicShortcutDelayField else { return }
         let afterShortcutText = afterShortcutField?.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let delayText = postDelayField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let macroTermMaxText = macroTermMaxField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let restLoopIntervalText = restLoopIntervalField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let restDurationText = restDurationField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let maxLoopCountText = maxLoopCountField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let periodicEnabled = periodicShortcutEnabledCheckbox.state == .on
         let periodicShortcutText = periodicShortcutField?.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let periodicLoopIntervalText = periodicShortcutLoopIntervalField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -149,6 +153,10 @@ final class MacroControlWindowManager: NSObject, NSWindowDelegate {
         }
         guard let restDuration = TimeInterval(restDurationText), restDuration.isFinite, restDuration >= 0 else {
             showValidationError("Rest duration must be a number >= 0.")
+            return
+        }
+        guard let maxLoopCount = Int(maxLoopCountText), maxLoopCount >= 0 else {
+            showValidationError("Maximum loops must be an integer >= 0. Use 0 for unlimited.")
             return
         }
 
@@ -181,6 +189,7 @@ final class MacroControlWindowManager: NSObject, NSWindowDelegate {
                 macroTermMaxSeconds: macroTermMax,
                 restLoopInterval: restLoopInterval,
                 restDurationSeconds: restDuration,
+                maxLoopCount: maxLoopCount,
                 periodicShortcutEnabled: periodicEnabled,
                 periodicShortcutText: periodicShortcutText,
                 periodicShortcutLoopInterval: periodicLoopInterval,
@@ -217,7 +226,7 @@ final class MacroControlWindowManager: NSObject, NSWindowDelegate {
         guard window == nil else { return }
 
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 430),
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 460),
             styleMask: [.titled, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -245,10 +254,13 @@ final class MacroControlWindowManager: NSObject, NSWindowDelegate {
         let periodicLoopsLabel = NSTextField(labelWithString: "loops")
         let periodicWaitLabel = NSTextField(labelWithString: "After shortcut: wait")
         let periodicWaitSecondsLabel = NSTextField(labelWithString: "seconds")
-        let step7 = NSTextField(labelWithString: "7. Loop back to step 1")
+        let step7 = NSTextField(labelWithString: "7. Stop after")
+        let maxLoopSuffixLabel = NSTextField(labelWithString: "loops (0 = unlimited)")
+        let step8 = NSTextField(labelWithString: "8. Loop back to step 1")
         [
             step1, step2, step3, step4, macroTermSecondsLabel, step5, restLoopsLabel, restSecondsLabel,
-            step6, periodicEveryLabel, periodicLoopsLabel, periodicWaitLabel, periodicWaitSecondsLabel, step7
+            step6, periodicEveryLabel, periodicLoopsLabel, periodicWaitLabel, periodicWaitSecondsLabel,
+            step7, maxLoopSuffixLabel, step8
         ].forEach {
             $0.font = NSFont.systemFont(ofSize: 12, weight: .medium)
             $0.translatesAutoresizingMaskIntoConstraints = false
@@ -295,6 +307,13 @@ final class MacroControlWindowManager: NSObject, NSWindowDelegate {
         restField.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(restField)
         restDurationField = restField
+
+        let maxLoopField = NSTextField(string: "0")
+        maxLoopField.placeholderString = "loops"
+        maxLoopField.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        maxLoopField.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(maxLoopField)
+        maxLoopCountField = maxLoopField
 
         let periodicEnabled = NSButton(checkboxWithTitle: "Enable", target: self, action: #selector(periodicEnabledChanged))
         periodicEnabled.translatesAutoresizingMaskIntoConstraints = false
@@ -436,9 +455,20 @@ final class MacroControlWindowManager: NSObject, NSWindowDelegate {
 
             step7.topAnchor.constraint(equalTo: periodicWaitLabel.bottomAnchor, constant: 10),
             step7.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12),
-            step7.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12),
 
-            play.topAnchor.constraint(equalTo: step7.bottomAnchor, constant: 12),
+            maxLoopField.leadingAnchor.constraint(equalTo: step7.trailingAnchor, constant: 8),
+            maxLoopField.widthAnchor.constraint(equalToConstant: 70),
+            maxLoopField.centerYAnchor.constraint(equalTo: step7.centerYAnchor),
+
+            maxLoopSuffixLabel.leadingAnchor.constraint(equalTo: maxLoopField.trailingAnchor, constant: 8),
+            maxLoopSuffixLabel.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor, constant: -12),
+            maxLoopSuffixLabel.centerYAnchor.constraint(equalTo: step7.centerYAnchor),
+
+            step8.topAnchor.constraint(equalTo: step7.bottomAnchor, constant: 10),
+            step8.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12),
+            step8.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12),
+
+            play.topAnchor.constraint(equalTo: step8.bottomAnchor, constant: 12),
             play.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12),
 
             stop.centerYAnchor.constraint(equalTo: play.centerYAnchor),
@@ -565,6 +595,7 @@ final class MacroControlWindowManager: NSObject, NSWindowDelegate {
         periodicShortcutLoopIntervalField?.isEnabled = isPeriodicEnabled && !lastPlaybackIsRunning
         periodicShortcutField?.isEnabled = isPeriodicEnabled && !lastPlaybackIsRunning
         periodicShortcutDelayField?.isEnabled = isPeriodicEnabled && !lastPlaybackIsRunning
+        maxLoopCountField?.isEnabled = !lastPlaybackIsRunning && !isReadingKey
     }
 
     func windowDidMove(_ notification: Notification) {
