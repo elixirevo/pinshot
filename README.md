@@ -142,7 +142,7 @@ brew install --cask pinshot
 
 ### Verification
 
-Run `make test` for crop coordinates, 1×/2× resolution, annotations and pin drawing, asymmetric padding and transparent corners, separate save destinations, history persistence and opt-out, FIFO retention at every limit, unlimited retention, folder changes, save/cleanup failure recovery, and corrupt-index protection. `make preview-screenshot-editor` opens the real editor with a generated test image, so its UI can be checked without Screen Recording permission. Preview exports go to `.build/editor-preview.png`.
+Run `make test` for crop coordinates, 1×/2× resolution, annotations and pin drawing, asymmetric padding and transparent corners, separate save destinations, history persistence and opt-out, FIFO retention at every limit, unlimited retention, folder changes, save/cleanup failure recovery, corrupt-index protection, and history shelf placement, scrolling, live updates, and keyboard navigation. `make preview-screenshot-editor` opens the real editor with a generated test image, so its UI can be checked without Screen Recording permission. Preview exports go to `.build/editor-preview.png`. `make preview-pins` shows the pin controls and horizontal history shelf with temporary sample captures.
 
 ## 🔒 Permissions
 

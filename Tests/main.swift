@@ -216,6 +216,11 @@ expect(matches(bitmap(pinCanvas.renderedImage()!).colorAt(x: 40, y: 170)!, .red)
 print("PASS: asymmetric padding, rounded alpha, Retina export, separate folders and save errors, persistent history, history opt-out, folder changes, edited history, corrupt-index protection, pin drawing/undo/redo")
 
 try testHistoryRetention()
+try testPinInterface()
+
+if CommandLine.arguments.contains("--preview-pins") || Bundle.main.bundleIdentifier == "com.elixirevo.PinShot.PinPreview" {
+    try previewPinInterface()
+}
 
 if CommandLine.arguments.contains("--preview") || Bundle.main.bundleIdentifier == "com.elixirevo.PinShot.EditorPreview" {
     app.setActivationPolicy(.regular)
