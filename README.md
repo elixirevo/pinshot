@@ -92,7 +92,7 @@ brew install --cask pinshot
 ### Prerequisites
 
 * macOS 12.0 or later
-* Xcode Command Line Tools (`xcode-select --install`)
+* Xcode 26 or later with Icon Composer (required to compile `pinshot.icon`)
 
 ### Build Steps
 
@@ -108,6 +108,12 @@ brew install --cask pinshot
    ```bash
    make
    ```
+
+   The build compiles `pinshot.icon` into `Assets.car` and `pinshot.icns`,
+   and refreshes the 1024×1024 `icon.png` from the same design. To regenerate
+   only the icons, run `make icons`. If Command Line Tools is selected, the
+   icon script uses `/Applications/Xcode.app` automatically; for a different
+   Xcode installation, set `DEVELOPER_DIR` to its `Contents/Developer` directory.
 
    Release build with version metadata:
 

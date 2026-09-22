@@ -11,7 +11,9 @@
     <key>CFBundleDisplayName</key>
     <string>PinShot</string>
     <key>CFBundleIconFile</key>
-    <string>AppIcon</string>
+    <string>pinshot</string>
+    <key>CFBundleIconName</key>
+    <string>pinshot</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>

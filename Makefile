@@ -4,6 +4,7 @@ SRC_DIR = Sources
 OUT_DIR = build
 APP_BUNDLE = $(OUT_DIR)/$(APP_NAME).app
 APP_INFO_PLIST = $(APP_BUNDLE)/Contents/Info.plist
+ICON_INPUTS = $(shell find pinshot.icon -type f) pinshot.icon pinshot.icon/Assets
 DIST_DIR = dist
 ARCH ?= $(shell uname -m)
 ARCHS = arm64 x86_64
@@ -16,7 +17,10 @@ BUILD ?= 1
 
 all: $(APP_BUNDLE)
 
-.PHONY: test preview-screenshot-editor
+.PHONY: test preview-screenshot-editor icons
+
+icons:
+	./make_icns.sh "$(OUT_DIR)/icons"
 
 test:
 	mkdir -p .build
@@ -26,14 +30,16 @@ test:
 preview-screenshot-editor: test
 	.build/ScreenshotTests --preview
 
-$(APP_BUNDLE): $(SRC_DIR)/*.swift Info.plist
+$(APP_BUNDLE): $(SRC_DIR)/*.swift Info.plist Makefile make_icns.sh $(ICON_INPUTS)
 	mkdir -p $(APP_BUNDLE)/Contents/MacOS
 	mkdir -p $(APP_BUNDLE)/Contents/Resources
 	cp Info.plist $(APP_INFO_PLIST)
 	plutil -replace CFBundleShortVersionString -string "$(VERSION)" $(APP_INFO_PLIST)
 	plutil -replace CFBundleVersion -string "$(BUILD)" $(APP_INFO_PLIST)
-	cp AppIcon.icns $(APP_BUNDLE)/Contents/Resources/
+	./make_icns.sh "$(APP_BUNDLE)/Contents/Resources"
+	rm -f "$(APP_BUNDLE)/Contents/Resources/AppIcon.icns"
 	$(SWIFTC) $(SWIFT_FLAGS) $(SRC_DIR)/*.swift -o $(APP_BUNDLE)/Contents/MacOS/$(APP_NAME)
+	touch "$(APP_BUNDLE)"
 
 release:
 	@if [ -z "$(VERSION)" ] || [ -z "$(BUILD)" ]; then \
