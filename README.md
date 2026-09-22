@@ -38,7 +38,7 @@
 | `Cmd + Option + W` | Close all pinned screenshot windows |
 | `Esc` | Cancel capture mode / hide saved-region overlay |
 
-*Pinned screenshots have always-visible, black-bordered white buttons for Close, Copy, Save, Draw, and History. Drag the image to move it when drawing mode is off.*
+*Pinned screenshots have native circular buttons for Close, Copy, Save, Draw, and History, with glass styling on macOS 26 and later. Drag the image to move it when drawing mode is off.*
 *Open **Settings…** from the PinShot menu to change global shortcuts or restore their defaults under **Keyboard Shortcuts**. Click the current shortcut, press the new keys, and choose **Save**.*
 *Under **General**, use **Set Region…** to reselect the saved region and save a screenshot immediately. You can also enable **Launch at Login** (macOS 13 or later).*
 *Use `Play Macro` / `Stop Macro` in the Opt+2 macro panel to start or stop loop playback.*

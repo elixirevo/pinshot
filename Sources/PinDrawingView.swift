@@ -89,7 +89,7 @@ final class PinDrawingView: NSView {
     }
 }
 
-/// Explicit colors keep controls legible over both light and dark screenshots.
+/// Let AppKit render the same circular, adaptive controls used by system image overlays.
 final class PinControlButton: NSButton {
     init(symbol: String, label: String, target: AnyObject?, action: Selector?) {
         super.init(frame: NSRect(x: 0, y: 0, width: 28, height: 28))
@@ -99,26 +99,20 @@ final class PinControlButton: NSButton {
         setAccessibilityLabel(label)
         self.target = target
         self.action = action
-        isBordered = false
-        focusRingType = .none
-        appearance = NSAppearance(named: .aqua)
+        imagePosition = .imageOnly
+        imageScaling = .scaleProportionallyDown
+        symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 13, weight: .medium)
+        setButtonType(.momentaryPushIn)
+        isBordered = true
+        bezelStyle = .circular
+        if #available(macOS 26.0, *) {
+            bezelStyle = .glass
+            borderShape = .circle
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    override func draw(_ dirtyRect: NSRect) {
-        let rect = bounds.insetBy(dx: 1.5, dy: 1.5)
-        let shape = NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6)
-        (state == .on || isHighlighted ? NSColor(white: 0.80, alpha: 1) : NSColor(white: 0.98, alpha: 1)).setFill()
-        shape.fill()
-        NSColor.black.setStroke()
-        shape.lineWidth = 2
-        shape.stroke()
-        if let image {
-            image.draw(in: NSRect(x: (bounds.width - 16) / 2, y: (bounds.height - 16) / 2, width: 16, height: 16),
-                       from: .zero, operation: .sourceOver, fraction: isEnabled ? 1 : 0.3, respectFlipped: true, hints: nil)
-        }
-    }
 }
 
 final class PinDrawingToolbar: NSPanel {
@@ -138,15 +132,17 @@ final class PinDrawingToolbar: NSPanel {
         isOpaque = false
         backgroundColor = .clear
         hasShadow = true
-        let content = NSView(frame: NSRect(x: 0, y: 0, width: 348, height: 84))
+        let content = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: 348, height: 84))
+        content.material = .popover
+        content.blendingMode = .behindWindow
+        content.state = .active
         content.wantsLayer = true
-        content.layer?.backgroundColor = NSColor(white: 0.12, alpha: 1).cgColor
-        content.layer?.borderWidth = 1
-        content.layer?.borderColor = NSColor.white.cgColor
-        content.layer?.cornerRadius = 10
+        content.layer?.cornerRadius = 16
+        content.layer?.masksToBounds = true
         contentView = content
         for (index, tool) in [ScreenshotTool.pen, .rectangle, .ellipse, .arrow, .mosaic].enumerated() {
             let button = PinControlButton(symbol: tool.symbol, label: tool.title, target: self, action: #selector(selectTool(_:)))
+            button.setButtonType(.pushOnPushOff)
             button.tag = tool.rawValue
             button.frame.origin = NSPoint(x: 10 + index * 34, y: 46)
             content.addSubview(button)
@@ -160,7 +156,6 @@ final class PinDrawingToolbar: NSPanel {
         content.addSubview(redoButton)
         let done = NSButton(title: "Done", target: self, action: #selector(doneClicked))
         done.bezelStyle = .rounded
-        done.appearance = NSAppearance(named: .aqua)
         done.frame = NSRect(x: 264, y: 45, width: 74, height: 30)
         content.addSubview(done)
         for (index, color) in Self.colors.enumerated() {

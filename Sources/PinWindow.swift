@@ -44,7 +44,7 @@ class PinWindow: NSPanel, NSWindowDelegate {
         self.backgroundColor = .clear
         self.isOpaque = false
         self.hasShadow = true
-        let minContentSize = NSSize(width: 176, height: 96)
+        let minContentSize = NSSize(width: 184, height: 96)
         self.contentMinSize = minContentSize
         self.minSize = self.frameRect(forContentRect: NSRect(origin: .zero, size: minContentSize)).size
         
@@ -327,12 +327,15 @@ final class PinOverlayView: NSView {
             button.translatesAutoresizingMaskIntoConstraints = false
             addSubview(button)
             NSLayoutConstraint.activate([
-                button.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6 + CGFloat(index) * 32),
-                button.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+                button.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8 + CGFloat(index) * 34),
+                button.topAnchor.constraint(equalTo: topAnchor, constant: 8),
                 button.widthAnchor.constraint(equalToConstant: 28),
                 button.heightAnchor.constraint(equalToConstant: 28)
             ])
-            if index == 3 { drawButton = button }
+            if index == 3 {
+                button.setButtonType(.pushOnPushOff)
+                drawButton = button
+            }
         }
     }
 
