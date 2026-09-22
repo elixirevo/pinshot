@@ -6,7 +6,7 @@ struct WindowCandidate {
 }
 
 class CaptureOverlayWindow: NSPanel {
-    init(contentRect: NSRect) {
+    init(contentRect: NSRect, screenshotEditor: Bool = false) {
         super.init(contentRect: contentRect, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         
         self.isFloatingPanel = true
@@ -18,12 +18,19 @@ class CaptureOverlayWindow: NSPanel {
         self.acceptsMouseMovedEvents = true
         self.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         
-        let overlayView = CaptureOverlayView(frame: contentRect)
+        let viewFrame = NSRect(origin: .zero, size: contentRect.size)
+        let overlayView = screenshotEditor ? ScreenshotOverlayView(frame: viewFrame) : CaptureOverlayView(frame: viewFrame)
         self.contentView = overlayView
     }
     
     override var canBecomeKey: Bool { return true }
     override var canBecomeMain: Bool { return true }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if let editor = contentView as? ScreenshotOverlayView,
+           editor.performKeyEquivalent(with: event) { return true }
+        return super.performKeyEquivalent(with: event)
+    }
 }
 
 class CaptureOverlayView: NSView {

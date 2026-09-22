@@ -222,13 +222,16 @@ final class ScreenshotMacroManager {
     private func runNextLoop(afterShortcut: HotkeyShortcut?, periodicShortcut: HotkeyShortcut?, runID: UUID) {
         guard isRunning, self.runID == runID else { return }
 
-        ScreenshotSaveManager.shared.captureUsingSavedRegion(showPersistentIndicator: true) { [weak self] success, _ in
+        ScreenshotSaveManager.shared.captureUsingSavedRegion(showPersistentIndicator: true) { [weak self] success, capturedRegion in
             guard let self else { return }
             guard self.isRunning, self.runID == runID else { return }
 
             guard success else {
                 self.stopPlayback(hideWindow: false)
-                self.showSettingsError("Could not capture saved region. Please set region again with Option + 3.")
+                // Saving errors were already shown by the save manager. Stop before sending more keys.
+                if capturedRegion == nil {
+                    self.showSettingsError("Could not capture saved region. Please set region again with Option + 3.")
+                }
                 return
             }
 

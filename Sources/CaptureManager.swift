@@ -6,10 +6,32 @@ class CaptureManager {
     private var overlayWindows: [CaptureOverlayWindow] = []
     private var localEventMonitor: Any?
     private var isCapturing = false
+    private var pendingCompletion: (((NSImage, NSRect)?) -> Void)?
+    private var screenChangeObserver: NSObjectProtocol?
+    private var previousApplication: NSRunningApplication?
+    private var isPreparingScreenshot = false
 
     private enum SelectionMode {
         case regionOrWindow
         case regionOnly
+        case screenshotEditor
+    }
+
+    func startScreenshot() {
+        guard !isCapturing, !isPreparingScreenshot else { return }
+        isPreparingScreenshot = true
+        ScreenshotMacroManager.shared.handleOverlayDismissedByUser()
+        SavedRegionIndicatorManager.shared.hideAndWaitForCompositor { [weak self] in
+            PermissionGuideManager.shared.ensureScreenRecordingReady { isReady in
+                guard let self else { return }
+                self.isPreparingScreenshot = false
+                guard isReady else {
+                    PermissionGuideManager.shared.handleAuthorizedButUnavailableScreenCapture()
+                    return
+                }
+                self.startCapture(selectionMode: .screenshotEditor) { _ in }
+            }
+        }
     }
     
     func startCapture(completion: @escaping ((NSImage, NSRect)?) -> Void) {
@@ -88,42 +110,64 @@ class CaptureManager {
             window.orderOut(nil)
         }
         overlayWindows.removeAll()
+        if let screenChangeObserver {
+            NotificationCenter.default.removeObserver(screenChangeObserver)
+            self.screenChangeObserver = nil
+        }
+        NSCursor.arrow.set()
+    }
+
+    private func complete(_ result: (NSImage, NSRect)?, restoreFocus: Bool = true) {
+        let completion = pendingCompletion
+        pendingCompletion = nil
+        let previousApplication = self.previousApplication
+        self.previousApplication = nil
+        cleanup()
+        completion?(result)
+        if restoreFocus { previousApplication?.activate(options: .activateIgnoringOtherApps) }
     }
 
     private func startCapture(
         selectionMode: SelectionMode,
         completion: @escaping ((NSImage, NSRect)?) -> Void
     ) {
-        guard overlayWindows.isEmpty, !isCapturing else { return }
+        guard overlayWindows.isEmpty, !isCapturing else { completion(nil); return }
         isCapturing = true
+        pendingCompletion = completion
+        if selectionMode == .screenshotEditor {
+            let frontmost = NSWorkspace.shared.frontmostApplication
+            previousApplication = frontmost?.processIdentifier == ProcessInfo.processInfo.processIdentifier ? nil : frontmost
+        }
         var preparedOverlay = false
 
-        for screen in NSScreen.screens {
-            // Capture the screen immediately for the frozen effect.
-            guard let cgImage = getScreenCGImage(screen) else { continue }
+        // Freeze every display before showing any overlays (including mirrored displays).
+        let snapshots = NSScreen.screens.compactMap { screen -> (NSScreen, CGImage)? in
+            guard let image = getScreenCGImage(screen) else { return nil }
+            return (screen, image)
+        }
+        for (screen, cgImage) in snapshots {
             preparedOverlay = true
             let bgImage = NSImage(cgImage: cgImage, size: screen.frame.size)
             
-            let window = CaptureOverlayWindow(contentRect: screen.frame)
+            let window = CaptureOverlayWindow(contentRect: screen.frame, screenshotEditor: selectionMode == .screenshotEditor)
             self.overlayWindows.append(window)
             
             if let view = window.contentView as? CaptureOverlayView {
                 view.backgroundImage = bgImage
-                view.enableMagnifier = (selectionMode == .regionOnly)
-                view.windowCandidates = (selectionMode == .regionOrWindow) ? getVisibleWindowCandidates(for: screen, in: view) : []
+                view.enableMagnifier = (selectionMode != .regionOrWindow)
+                view.windowCandidates = (selectionMode != .regionOnly) ? getVisibleWindowCandidates(for: screen, in: view) : []
                 
                 view.onCancel = { [weak self] in
-                    self?.cleanup()
+                    self?.complete(nil)
                 }
                 view.onCaptureRegion = { [weak self, weak window] rectInWindow in
                     guard let self = self, let win = window else { return }
                     let screenRect = win.convertToScreen(rectInWindow)
                     let finalImage = self.cropCGImage(cgImage, sourceFrame: screen.frame, cropRectInWindow: rectInWindow)
-                    self.cleanup()
                     if let image = finalImage {
-                        completion((image, screenRect))
+                        self.complete((image, screenRect))
                     } else {
-                        completion(nil)
+                        self.complete(nil)
                     }
                 }
 
@@ -132,15 +176,54 @@ class CaptureManager {
                         guard let self = self, let win = window else { return }
                         let screenRect = win.convertToScreen(candidate.viewRect)
                         let finalImage = self.captureWindowCGImage(windowID: candidate.windowID, targetSize: screenRect.size)
-                        self.cleanup()
                         if let image = finalImage {
-                            completion((image, screenRect))
+                            self.complete((image, screenRect))
                         } else {
-                            completion(nil)
+                            self.complete(nil)
                         }
                     }
                 } else {
                     view.onCaptureWindow = nil
+                }
+
+                if let editor = view as? ScreenshotOverlayView {
+                    editor.sourceImage = cgImage
+                    editor.screenshotStyle = CapturePreferences.shared.screenshotStyle
+                    editor.onActivate = { [weak self, weak editor] in
+                        guard let self, let editor else { return }
+                        for overlay in self.overlayWindows {
+                            if let other = overlay.contentView as? ScreenshotOverlayView, other !== editor {
+                                other.resetSelection()
+                            }
+                        }
+                    }
+                    editor.onFinish = { [weak self, weak window] image, rect, output in
+                        guard let self, let window else { return }
+                        let screenRect = window.convertToScreen(rect)
+                        switch output {
+                        case .copy:
+                            NSPasteboard.general.clearContents()
+                            guard NSPasteboard.general.writeObjects([image]) else { NSSound.beep(); return }
+                            self.complete(nil)
+                        case .pin:
+                            self.complete(nil, restoreFocus: false)
+                            PinManager.shared.pin(image: image, at: NSRect(origin: screenRect.origin, size: image.size), destination: .screenshot)
+                        case .save:
+                            do {
+                                _ = try ScreenshotSaveManager.shared.saveScreenshot(image: image, destination: .screenshot)
+                                self.complete(nil)
+                            } catch {
+                                // Keep the edit session intact if saving fails.
+                                self.overlayWindows.forEach { $0.orderOut(nil) }
+                                let alert = NSAlert()
+                                alert.messageText = "Could Not Save Screenshot"
+                                alert.informativeText = error.localizedDescription
+                                alert.runModal()
+                                self.overlayWindows.forEach { $0.orderFrontRegardless() }
+                                window.makeKeyAndOrderFront(nil)
+                            }
+                        }
+                    }
                 }
             }
             
@@ -149,17 +232,23 @@ class CaptureManager {
         }
 
         guard preparedOverlay else {
-            cleanup()
-            completion(nil)
+            complete(nil)
             return
         }
         
         NSApp.activate(ignoringOtherApps: true)
+        if let activeWindow = overlayWindows.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) {
+            activeWindow.makeKeyAndOrderFront(nil)
+            activeWindow.makeFirstResponder(activeWindow.contentView)
+        }
+        screenChangeObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.complete(nil) }
         
         if localEventMonitor == nil {
             localEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                 if event.keyCode == 53 { // ESC
-                    self?.cleanup()
+                    self?.complete(nil)
                     return nil
                 }
                 return event
@@ -168,7 +257,7 @@ class CaptureManager {
     }
     
     private func getVisibleWindowCandidates(for screen: NSScreen, in view: NSView) -> [WindowCandidate] {
-        let desktopTopY = NSScreen.screens.map(\.frame.maxY).max() ?? 0
+        let desktopTopY = NSScreen.screens.first?.frame.maxY ?? 0
         let currentPID = Int32(ProcessInfo.processInfo.processIdentifier)
         
         let options = CGWindowListOption(arrayLiteral: .optionOnScreenOnly, .excludeDesktopElements)

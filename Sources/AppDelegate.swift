@@ -2,16 +2,20 @@ import Cocoa
 
 class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var statusItem: NSStatusItem!
-    private var launchAtLoginMenuItem: NSMenuItem?
+    private lazy var settingsWindowController = SettingsWindowController()
     private var captureMenuItem: NSMenuItem?
+    private var screenshotMenuItem: NSMenuItem?
     private var saveScreenshotMenuItem: NSMenuItem?
-    private var setScreenshotRegionMenuItem: NSMenuItem?
     private var closeAllMenuItem: NSMenuItem?
     
     func applicationDidFinishLaunching(_ aNotification: Notification) {
         setupStatusBar()
         setupHotkeys()
         PermissionGuideManager.shared.checkAndGuidePermissionsIfNeeded()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        PinManager.shared.finishEditing()
     }
     
     private func setupStatusBar() {
@@ -26,6 +30,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         
         let menu = NSMenu()
+        let screenshotItem = NSMenuItem(title: "Take Screenshot…", action: #selector(screenshotClicked), keyEquivalent: "")
+        screenshotItem.target = self
+        menu.addItem(screenshotItem)
+        screenshotMenuItem = screenshotItem
+
         let captureItem = NSMenuItem(title: "Capture & Pin", action: #selector(captureClicked), keyEquivalent: "")
         captureItem.target = self
         menu.addItem(captureItem)
@@ -45,55 +54,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(closeItem)
         closeAllMenuItem = closeItem
 
-        let changeCaptureItem = NSMenuItem(title: "Change Capture Shortcut…", action: #selector(changeCaptureShortcut), keyEquivalent: "")
-        changeCaptureItem.target = self
-        menu.addItem(changeCaptureItem)
-
-        let changeSaveScreenshotItem = NSMenuItem(
-            title: "Change Save-Screenshot Shortcut…",
-            action: #selector(changeSaveScreenshotShortcut),
-            keyEquivalent: ""
-        )
-        changeSaveScreenshotItem.target = self
-        menu.addItem(changeSaveScreenshotItem)
-
-        let setScreenshotRegionItem = NSMenuItem(
-            title: "Set Screenshot Region…",
-            action: #selector(setScreenshotRegionClicked),
-            keyEquivalent: ""
-        )
-        setScreenshotRegionItem.target = self
-        menu.addItem(setScreenshotRegionItem)
-        setScreenshotRegionMenuItem = setScreenshotRegionItem
-
-        let changeSetScreenshotRegionItem = NSMenuItem(
-            title: "Change Set-Region Shortcut…",
-            action: #selector(changeSetScreenshotRegionShortcut),
-            keyEquivalent: ""
-        )
-        changeSetScreenshotRegionItem.target = self
-        menu.addItem(changeSetScreenshotRegionItem)
-
-        let changeCloseAllItem = NSMenuItem(title: "Change Close-All Shortcut…", action: #selector(changeCloseAllShortcut), keyEquivalent: "")
-        changeCloseAllItem.target = self
-        menu.addItem(changeCloseAllItem)
-
-        let resetShortcutsItem = NSMenuItem(title: "Reset Shortcuts to Default", action: #selector(resetShortcutsToDefault), keyEquivalent: "")
-        resetShortcutsItem.target = self
-        menu.addItem(resetShortcutsItem)
+        let historyItem = NSMenuItem(title: "Screenshot History…", action: #selector(openHistory), keyEquivalent: "")
+        historyItem.target = self
+        menu.addItem(historyItem)
 
         menu.addItem(NSMenuItem.separator())
-        let launchItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
-        launchItem.target = self
-        menu.addItem(launchItem)
-        launchAtLoginMenuItem = launchItem
+        let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
+        settingsItem.target = self
+        menu.addItem(settingsItem)
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Quit PinShot", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         menu.delegate = self
         
         statusItem.menu = menu
         updateHotkeyMenuItems()
-        updateLaunchAtLoginMenuItem()
     }
 
     private func makeStableStatusBarIcon() -> NSImage? {
@@ -120,6 +94,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func setupHotkeys() {
         // Initialize the shared hotkey manager
         let _ = HotkeyManager.shared
+
+        HotkeyManager.shared.onScreenshotShortcut = { [weak self] in
+            self?.screenshotClicked()
+        }
         
         HotkeyManager.shared.onCaptureShortcut = { [weak self] in
             self?.captureClicked()
@@ -141,8 +119,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func captureClicked() {
         CaptureManager.shared.startCapture { result in
             guard let result = result else { return }
-            PinManager.shared.pin(image: result.0, at: result.1)
+            PinManager.shared.pin(image: result.0, at: result.1, recordHistory: true)
         }
+    }
+
+    @objc private func screenshotClicked() {
+        // A menu invocation should not freeze the status menu into the screenshot.
+        DispatchQueue.main.async { CaptureManager.shared.startScreenshot() }
     }
 
     @objc private func saveScreenshotClicked() {
@@ -157,182 +140,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         PinManager.shared.closeAll()
     }
 
-    @objc private func toggleLaunchAtLogin() {
-        let manager = LoginLaunchManager.shared
-        let nextEnabled = !manager.isEnabled
+    @objc private func openSettings() {
+        settingsWindowController.showSettings()
+    }
 
-        do {
-            try manager.setEnabled(nextEnabled)
-        } catch {
-            showLaunchAtLoginError(error)
-        }
-
-        updateLaunchAtLoginMenuItem()
+    @objc private func openHistory() {
+        PinHistoryWindowController.shared.showHistory()
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         updateHotkeyMenuItems()
-        updateLaunchAtLoginMenuItem()
     }
 
     private func updateHotkeyMenuItems() {
+        let unavailable = HotkeyManager.shared.registrationErrors[.screenshot]
+        screenshotMenuItem?.title = "Take Screenshot… (\(HotkeyManager.shared.screenshotShortcutDisplay))" + (unavailable == nil ? "" : " — Shortcut Unavailable")
+        screenshotMenuItem?.toolTip = unavailable
         captureMenuItem?.title = "Capture & Pin (\(HotkeyManager.shared.captureShortcutDisplay))"
         saveScreenshotMenuItem?.title = "Capture & Save Screenshot (\(HotkeyManager.shared.saveScreenshotShortcutDisplay))"
-        setScreenshotRegionMenuItem?.title = "Set Screenshot Region… (\(HotkeyManager.shared.setScreenshotRegionShortcutDisplay))"
         closeAllMenuItem?.title = "Close All Pins (\(HotkeyManager.shared.closeAllShortcutDisplay))"
-    }
-
-    @objc private func changeCaptureShortcut() {
-        promptForShortcutChange(
-            action: .capture,
-            title: "Change Capture Shortcut"
-        )
-    }
-
-    @objc private func changeSaveScreenshotShortcut() {
-        promptForShortcutChange(
-            action: .saveScreenshot,
-            title: "Change Save-Screenshot Shortcut"
-        )
-    }
-
-    @objc private func changeSetScreenshotRegionShortcut() {
-        promptForShortcutChange(
-            action: .setScreenshotRegion,
-            title: "Change Set-Region Shortcut"
-        )
-    }
-
-    @objc private func changeCloseAllShortcut() {
-        promptForShortcutChange(
-            action: .closeAll,
-            title: "Change Close-All Shortcut"
-        )
-    }
-
-    @objc private func resetShortcutsToDefault() {
-        do {
-            try HotkeyManager.shared.resetShortcut(action: .capture)
-            try HotkeyManager.shared.resetShortcut(action: .saveScreenshot)
-            try HotkeyManager.shared.resetShortcut(action: .setScreenshotRegion)
-            try HotkeyManager.shared.resetShortcut(action: .closeAll)
-            updateHotkeyMenuItems()
-        } catch {
-            showHotkeyError(error)
-        }
-    }
-
-    private func promptForShortcutChange(action: HotkeyAction, title: String) {
-        let alert = NSAlert()
-        alert.alertStyle = .informational
-        alert.messageText = title
-        alert.informativeText = "Press the shortcut keys now. Modifier keys are optional."
-        alert.addButton(withTitle: "Save")
-        alert.addButton(withTitle: "Cancel")
-
-        let currentShortcut = HotkeyManager.shared.shortcut(for: action)
-        let recorderView = HotkeyRecorderView(frame: NSRect(x: 0, y: 0, width: 320, height: 42), initialShortcut: currentShortcut)
-        alert.accessoryView = recorderView
-
-        let response = alert.runModal()
-        guard response == .alertFirstButtonReturn else { return }
-        guard let shortcut = recorderView.recordedShortcut else {
-            showHotkeyError(HotkeyError.invalidFormat)
-            return
-        }
-
-        do {
-            try HotkeyManager.shared.updateShortcut(action: action, shortcut: shortcut)
-            updateHotkeyMenuItems()
-        } catch {
-            showHotkeyError(error)
-        }
-    }
-
-    private func updateLaunchAtLoginMenuItem() {
-        guard let item = launchAtLoginMenuItem else { return }
-
-        let manager = LoginLaunchManager.shared
-        if manager.isSupported {
-            item.title = "Launch at Login"
-            item.isEnabled = true
-            item.state = manager.isEnabled ? .on : .off
-        } else {
-            item.title = "Launch at Login (macOS 13+)"
-            item.isEnabled = false
-            item.state = .off
-        }
-    }
-
-    private func showLaunchAtLoginError(_ error: Error) {
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = "Could Not Update Login Setting"
-        alert.informativeText = "Please check login item permission in System Settings and try again."
-        alert.addButton(withTitle: "OK")
-        alert.runModal()
-    }
-
-    private func showHotkeyError(_ error: Error) {
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = "Could Not Update Shortcut"
-        alert.informativeText = (error as? LocalizedError)?.errorDescription ?? "Please try another shortcut."
-        alert.addButton(withTitle: "OK")
-        alert.runModal()
-    }
-}
-
-private final class HotkeyRecorderView: NSView {
-    private let valueLabel = NSTextField(labelWithString: "")
-    private(set) var recordedShortcut: HotkeyShortcut?
-
-    init(frame frameRect: NSRect, initialShortcut: HotkeyShortcut) {
-        self.recordedShortcut = initialShortcut
-        super.init(frame: frameRect)
-        setupUI()
-        valueLabel.stringValue = "Current: \(initialShortcut.displayString)"
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    override var acceptsFirstResponder: Bool { true }
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        window?.makeFirstResponder(self)
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        window?.makeFirstResponder(self)
-    }
-
-    override func keyDown(with event: NSEvent) {
-        do {
-            let shortcut = try HotkeyShortcut.from(event: event)
-            recordedShortcut = shortcut
-            valueLabel.stringValue = "Recorded: \(shortcut.displayString)"
-        } catch {
-            NSSound.beep()
-        }
-    }
-
-    private func setupUI() {
-        wantsLayer = true
-        layer?.cornerRadius = 6
-        layer?.borderWidth = 1
-        layer?.borderColor = NSColor.separatorColor.cgColor
-        layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
-
-        valueLabel.alignment = .center
-        valueLabel.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(valueLabel)
-
-        NSLayoutConstraint.activate([
-            valueLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
-            valueLabel.centerYAnchor.constraint(equalTo: centerYAnchor)
-        ])
     }
 }

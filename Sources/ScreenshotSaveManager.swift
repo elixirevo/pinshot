@@ -11,6 +11,7 @@ final class ScreenshotSaveManager {
     private let defaults = UserDefaults.standard
     private let savedRegionDefaultsKey = "screenshot.savedRegion.v1"
     private let fileManager = FileManager.default
+    private let preferences: CapturePreferences
 
     private lazy var timestampFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -19,12 +20,13 @@ final class ScreenshotSaveManager {
         return formatter
     }()
 
-    private init() {}
+    init(preferences: CapturePreferences = .shared) { self.preferences = preferences }
 
     func captureUsingSavedRegionOrPromptSelection() {
-        captureUsingSavedRegion(showPersistentIndicator: true) { [weak self] success, _ in
+        captureUsingSavedRegion(showPersistentIndicator: true) { [weak self] success, capturedRegion in
             guard let self else { return }
-            if success { return }
+            // A valid region with a failed save must not trigger another region selection.
+            if success || capturedRegion != nil { return }
             self.selectRegionAndCaptureAndSave(showPersistentIndicator: true)
         }
     }
@@ -60,7 +62,10 @@ final class ScreenshotSaveManager {
                     return
                 }
 
-                self.save(image: image)
+                guard self.save(image: image) else {
+                    completion(false, screenRect)
+                    return
+                }
                 if showPersistentIndicator {
                     SavedRegionIndicatorManager.shared.show(region: screenRect)
                     ScreenshotMacroManager.shared.showControlWindow(below: screenRect)
@@ -80,7 +85,7 @@ final class ScreenshotSaveManager {
             guard let self else { return }
             guard let (image, screenRect) = result else { return }
             self.persistRegion(from: screenRect)
-            self.save(image: image)
+            guard self.save(image: image) else { return }
             if showPersistentIndicator {
                 SavedRegionIndicatorManager.shared.show(region: screenRect)
                 ScreenshotMacroManager.shared.showControlWindow(below: screenRect)
@@ -88,8 +93,8 @@ final class ScreenshotSaveManager {
         }
     }
 
-    func openSaveDirectory() {
-        guard let directoryURL = try? ensureSaveDirectory() else { return }
+    func openSaveDirectory(for destination: CaptureDestination = .macro) {
+        guard let directoryURL = try? ensureSaveDirectory(for: destination) else { return }
         NSWorkspace.shared.open(directoryURL)
     }
 
@@ -134,20 +139,26 @@ final class ScreenshotSaveManager {
         return SavedRegion(displayID: displayNumber.uint32Value, localRect: rect)
     }
 
-    private func save(image: NSImage) {
+    private func save(image: NSImage) -> Bool {
         do {
-            let directoryURL = try ensureSaveDirectory()
-            let fileURL = nextOutputURL(in: directoryURL)
-            try writePNG(image: image, to: fileURL)
+            _ = try saveScreenshot(image: image)
+            return true
         } catch {
             showSaveError(error)
+            return false
         }
     }
 
-    private func ensureSaveDirectory() throws -> URL {
-        let picturesDirectory = fileManager.urls(for: .picturesDirectory, in: .userDomainMask).first
-        let baseDirectory = picturesDirectory ?? fileManager.homeDirectoryForCurrentUser
-        let targetDirectory = baseDirectory.appendingPathComponent("PinShotCaptures", isDirectory: true)
+    @discardableResult
+    func saveScreenshot(image: NSImage, destination: CaptureDestination = .macro) throws -> URL {
+        let directoryURL = try ensureSaveDirectory(for: destination)
+        let fileURL = nextOutputURL(in: directoryURL)
+        try writePNG(image: image, to: fileURL)
+        return fileURL
+    }
+
+    private func ensureSaveDirectory(for destination: CaptureDestination) throws -> URL {
+        let targetDirectory = preferences.directory(for: destination)
         try fileManager.createDirectory(at: targetDirectory, withIntermediateDirectories: true)
         return targetDirectory
     }

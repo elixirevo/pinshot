@@ -1,8 +1,13 @@
 import Cocoa
 import VisionKit
 
-class PinWindow: NSPanel {
-    let image: NSImage
+class PinWindow: NSPanel, NSWindowDelegate {
+    private(set) var image: NSImage
+    let destination: CaptureDestination
+    var onImageChanged: ((NSImage) -> Void)?
+    private let drawingView = PinDrawingView()
+    private var drawingToolbar: PinDrawingToolbar?
+    private var isDrawing = false
     
     private let imageView = NSImageView()
     private let overlayView = PinOverlayView()
@@ -10,8 +15,9 @@ class PinWindow: NSPanel {
     private var textSelectionContext: AnyObject?
     private var localKeyMonitor: Any?
     
-    init(image: NSImage, frame: NSRect) {
+    init(image: NSImage, frame: NSRect, destination: CaptureDestination = .pin) {
         self.image = image
+        self.destination = destination
         
         let styleMask: NSWindow.StyleMask = [
             .titled,
@@ -22,6 +28,7 @@ class PinWindow: NSPanel {
         super.init(contentRect: frame, styleMask: styleMask, backing: .buffered, defer: false)
         
         self.titlebarAppearsTransparent = true
+        self.title = "Pinned Screenshot"
         self.titleVisibility = .hidden
         self.standardWindowButton(.closeButton)?.isHidden = true
         self.standardWindowButton(.miniaturizeButton)?.isHidden = true
@@ -37,10 +44,14 @@ class PinWindow: NSPanel {
         self.backgroundColor = .clear
         self.isOpaque = false
         self.hasShadow = true
-        let minContentSize = NSSize(width: 120, height: 80)
+        let minContentSize = NSSize(width: 176, height: 96)
         self.contentMinSize = minContentSize
         self.minSize = self.frameRect(forContentRect: NSRect(origin: .zero, size: minContentSize)).size
         
+        self.delegate = self
+        if frame.width < minContentSize.width || frame.height < minContentSize.height {
+            setContentSize(NSSize(width: max(frame.width, minContentSize.width), height: max(frame.height, minContentSize.height)))
+        }
         setupViews()
         installLocalCopyShortcutMonitor()
     }
@@ -65,6 +76,13 @@ class PinWindow: NSPanel {
             textSelectionContext = context
         }
         
+        drawingView.configure(image: image)
+        drawingView.frame = containerView.bounds
+        drawingView.autoresizingMask = [.width, .height]
+        drawingView.isHidden = true
+        drawingView.onChange = { [weak self] in self?.drawingToolbar?.refresh() }
+        containerView.addSubview(drawingView)
+
         overlayView.frame = containerView.bounds
         overlayView.autoresizingMask = [.width, .height]
         containerView.addSubview(overlayView)
@@ -73,12 +91,10 @@ class PinWindow: NSPanel {
             self?.close()
         }
         
-        overlayView.onCopy = { [weak self] in
-            guard let self = self else { return }
-            let pb = NSPasteboard.general
-            pb.clearContents()
-            pb.writeObjects([self.image])
-        }
+        overlayView.onCopy = { [weak self] in self?.copyImage() }
+        overlayView.onSave = { [weak self] in self?.saveImage() }
+        overlayView.onDraw = { [weak self] in self?.toggleDrawing() }
+        overlayView.onHistory = { PinHistoryWindowController.shared.showHistory() }
 
         configureTextSelectionIfAvailable()
     }
@@ -93,7 +109,9 @@ class PinWindow: NSPanel {
                 NSApp.activate(ignoringOtherApps: true)
             }
             makeKeyAndOrderFront(nil)
-            if #available(macOS 13.0, *),
+            if isDrawing {
+                makeFirstResponder(drawingView)
+            } else if #available(macOS 13.0, *),
                let context = textSelectionContext as? TextSelectionContext {
                 makeFirstResponder(context.overlay)
             }
@@ -104,19 +122,112 @@ class PinWindow: NSPanel {
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if handleDrawingKey(event) { return true }
         if isCopyShortcut(event) {
-            if copySelectedTextFromOverlay() {
-                return true
-            }
+            if !isDrawing && copySelectedTextFromOverlay() { return true }
+            copyImage()
+            return true
+        }
+        if event.modifierFlags.contains(.command), event.keyCode == 1 {
+            saveImage()
+            return true
         }
         return super.performKeyEquivalent(with: event)
     }
 
     override func keyDown(with event: NSEvent) {
-        if isCopyShortcut(event), copySelectedTextFromOverlay() {
+        if handleDrawingKey(event) { return }
+        super.keyDown(with: event)
+    }
+
+    private func handleDrawingKey(_ event: NSEvent) -> Bool {
+        guard isDrawing else { return false }
+        if event.keyCode == 53 { toggleDrawing(); return true }
+        if event.modifierFlags.contains(.command), event.keyCode == 6 {
+            event.modifierFlags.contains(.shift) ? drawingView.redoStroke() : drawingView.undoStroke()
+            return true
+        }
+        guard event.modifierFlags.intersection([.command, .option, .control]).isEmpty else { return false }
+        let tools: [UInt16: ScreenshotTool] = [35: .pen, 15: .rectangle, 31: .ellipse, 0: .arrow, 46: .mosaic]
+        guard let tool = tools[event.keyCode] else { return false }
+        drawingView.tool = tool
+        drawingToolbar?.refresh()
+        return true
+    }
+
+    private var currentImage: NSImage { isDrawing ? drawingView.renderedImage() ?? image : image }
+
+    private func copyImage() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.writeObjects([currentImage])
+    }
+
+    private func saveImage() {
+        do {
+            _ = try ScreenshotSaveManager.shared.saveScreenshot(image: currentImage, destination: destination)
+        } catch { showError(error, title: "Could Not Save Screenshot") }
+    }
+
+    private func toggleDrawing() {
+        if isDrawing {
+            finishDrawing()
             return
         }
-        super.keyDown(with: event)
+        isDrawing = true
+        drawingView.configure(image: image)
+        drawingView.isHidden = false
+        if #available(macOS 13.0, *), let context = textSelectionContext as? TextSelectionContext {
+            context.overlay.isHidden = true
+        }
+        let toolbar = drawingToolbar ?? PinDrawingToolbar(canvas: drawingView)
+        toolbar.onDone = { [weak self] in self?.finishDrawing() }
+        drawingToolbar = toolbar
+        toolbar.refresh()
+        addChildWindow(toolbar, ordered: .above)
+        positionDrawingToolbar()
+        toolbar.orderFront(nil)
+        overlayView.setDrawing(true)
+        makeFirstResponder(drawingView)
+    }
+
+    func finishDrawing() {
+        guard isDrawing else { return }
+        if drawingView.hasEdits, let edited = drawingView.renderedImage() {
+            image = edited
+            imageView.image = edited
+            onImageChanged?(edited)
+            configureTextSelectionIfAvailable()
+        }
+        isDrawing = false
+        drawingView.isHidden = true
+        if let drawingToolbar { removeChildWindow(drawingToolbar); drawingToolbar.orderOut(nil) }
+        if #available(macOS 13.0, *), let context = textSelectionContext as? TextSelectionContext {
+            context.overlay.isHidden = false
+        }
+        overlayView.setDrawing(false)
+    }
+
+    private func positionDrawingToolbar() {
+        guard isDrawing, let toolbar = drawingToolbar, let visible = screen?.visibleFrame else { return }
+        var origin = NSPoint(x: frame.midX - toolbar.frame.width / 2, y: frame.minY - toolbar.frame.height - 8)
+        if origin.y < visible.minY { origin.y = min(frame.maxY + 8, visible.maxY - toolbar.frame.height) }
+        origin.x = min(max(origin.x, visible.minX), visible.maxX - toolbar.frame.width)
+        toolbar.setFrameOrigin(origin)
+    }
+
+    func windowDidMove(_ notification: Notification) { positionDrawingToolbar() }
+    func windowDidResize(_ notification: Notification) { positionDrawingToolbar() }
+
+    override func close() {
+        finishDrawing()
+        super.close()
+    }
+
+    private func showError(_ error: Error, title: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = error.localizedDescription
+        alert.beginSheetModal(for: self)
     }
 
     deinit {
@@ -130,6 +241,7 @@ class PinWindow: NSPanel {
         guard #available(macOS 13.0, *) else { return }
         guard let context = textSelectionContext as? TextSelectionContext else { return }
 
+        textAnalysisTask?.cancel()
         textAnalysisTask = Task { [weak self] in
             guard let self = self else { return }
             let configuration = ImageAnalyzer.Configuration([.text])
@@ -172,7 +284,7 @@ class PinWindow: NSPanel {
 
     private func installLocalCopyShortcutMonitor() {
         localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self = self, self.isKeyWindow else { return event }
+            guard let self = self, self.isKeyWindow, !self.isDrawing else { return event }
             if self.isCopyShortcut(event) {
                 return self.copySelectedTextFromOverlay() ? nil : event
             }
@@ -193,103 +305,52 @@ private final class TextSelectionContext: NSObject {
     let overlay = ImageAnalysisOverlayView()
 }
 
-class PinOverlayView: NSView {
+final class PinOverlayView: NSView {
     var onClose: (() -> Void)?
     var onCopy: (() -> Void)?
-    
-    private let closeBtn = NSButton()
-    private let copyBtn = NSButton()
-    
-    private var trackingArea: NSTrackingArea?
-    
+    var onSave: (() -> Void)?
+    var onDraw: (() -> Void)?
+    var onHistory: (() -> Void)?
+    private var drawButton: PinControlButton!
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        setupButtons()
-    }
-    
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-    
-    private func setupButtons() {
-        closeBtn.title = "X"
-        closeBtn.bezelStyle = .circular
-        closeBtn.target = self
-        closeBtn.action = #selector(closeClicked)
-        closeBtn.translatesAutoresizingMaskIntoConstraints = false
-        closeBtn.alphaValue = 0.0
-        
-        copyBtn.title = "Copy"
-        copyBtn.bezelStyle = .roundRect
-        copyBtn.target = self
-        copyBtn.action = #selector(copyClicked)
-        copyBtn.translatesAutoresizingMaskIntoConstraints = false
-        copyBtn.alphaValue = 0.0
-        
-        addSubview(closeBtn)
-        addSubview(copyBtn)
-        
-        NSLayoutConstraint.activate([
-            closeBtn.topAnchor.constraint(equalTo: self.topAnchor, constant: 4),
-            closeBtn.leadingAnchor.constraint(equalTo: self.leadingAnchor, constant: 4),
-            closeBtn.widthAnchor.constraint(equalToConstant: 24),
-            closeBtn.heightAnchor.constraint(equalToConstant: 24),
-            
-            copyBtn.topAnchor.constraint(equalTo: self.topAnchor, constant: 4),
-            copyBtn.leadingAnchor.constraint(equalTo: closeBtn.trailingAnchor, constant: 4),
-            copyBtn.heightAnchor.constraint(equalToConstant: 24)
-        ])
-    }
-    
-    @objc private func closeClicked() {
-        onClose?()
-    }
-    
-    @objc private func copyClicked() {
-        onCopy?()
-        
-        // Visual feedback
-        let originalTitle = "Copy"
-        copyBtn.title = "Copied!"
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            self.copyBtn.title = originalTitle
+        let actions: [(String, String, Selector)] = [
+            ("xmark", "Close pin", #selector(closeClicked)),
+            ("doc.on.doc", "Copy screenshot (⌘C)", #selector(copyClicked)),
+            ("square.and.arrow.down", "Save screenshot (⌘S)", #selector(saveClicked)),
+            ("pencil.tip", "Draw on screenshot", #selector(drawClicked)),
+            ("clock.arrow.circlepath", "Screenshot history", #selector(historyClicked))
+        ]
+        for (index, item) in actions.enumerated() {
+            let button = PinControlButton(symbol: item.0, label: item.1, target: self, action: item.2)
+            button.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(button)
+            NSLayoutConstraint.activate([
+                button.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6 + CGFloat(index) * 32),
+                button.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+                button.widthAnchor.constraint(equalToConstant: 28),
+                button.heightAnchor.constraint(equalToConstant: 28)
+            ])
+            if index == 3 { drawButton = button }
         }
     }
 
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        
-        if let ta = trackingArea {
-            removeTrackingArea(ta)
-        }
-        
-        trackingArea = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways], owner: self, userInfo: nil)
-        if let ta = trackingArea {
-            addTrackingArea(ta)
-        }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func setDrawing(_ drawing: Bool) {
+        drawButton.state = drawing ? .on : .off
+        drawButton.needsDisplay = true
     }
-    
-    override func mouseEntered(with event: NSEvent) {
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.2
-            closeBtn.animator().alphaValue = 1.0
-            copyBtn.animator().alphaValue = 1.0
-        }
-    }
-    
-    override func mouseExited(with event: NSEvent) {
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.2
-            closeBtn.animator().alphaValue = 0.0
-            copyBtn.animator().alphaValue = 0.0
-        }
-    }
-    
+
+    @objc private func closeClicked() { onClose?() }
+    @objc private func copyClicked() { onCopy?() }
+    @objc private func saveClicked() { onSave?() }
+    @objc private func drawClicked() { onDraw?() }
+    @objc private func historyClicked() { onHistory?() }
+
     override func hitTest(_ point: NSPoint) -> NSView? {
         let view = super.hitTest(point)
-        if view == self {
-            return nil // Pass through to window background for dragging
-        }
-        return view
+        return view === self ? nil : view
     }
 }
