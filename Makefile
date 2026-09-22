@@ -16,6 +16,16 @@ BUILD ?= 1
 
 all: $(APP_BUNDLE)
 
+.PHONY: test preview-screenshot-editor
+
+test:
+	mkdir -p .build
+	$(SWIFTC) $(SWIFT_FLAGS) $(filter-out Sources/main.swift,$(wildcard Sources/*.swift)) $(wildcard Tests/*.swift) -o .build/ScreenshotTests
+	.build/ScreenshotTests
+
+preview-screenshot-editor: test
+	.build/ScreenshotTests --preview
+
 $(APP_BUNDLE): $(SRC_DIR)/*.swift Info.plist
 	mkdir -p $(APP_BUNDLE)/Contents/MacOS
 	mkdir -p $(APP_BUNDLE)/Contents/Resources

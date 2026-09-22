@@ -134,6 +134,10 @@ brew install --cask pinshot
    mv build/PinShot.app /Applications/
    ```
 
+### Verification
+
+Run `make test` for crop coordinates, 1×/2× resolution, annotations and pin drawing, asymmetric padding and transparent corners, separate save destinations, history persistence and opt-out, FIFO retention at every limit, unlimited retention, folder changes, save/cleanup failure recovery, and corrupt-index protection. `make preview-screenshot-editor` opens the real editor with a generated test image, so its UI can be checked without Screen Recording permission. Preview exports go to `.build/editor-preview.png`.
+
 ## 🔒 Permissions
 
 When you run PinShot, it checks and guides these permissions:
