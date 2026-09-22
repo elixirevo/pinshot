@@ -94,7 +94,7 @@ class PinWindow: NSPanel, NSWindowDelegate {
         overlayView.onCopy = { [weak self] in self?.copyImage() }
         overlayView.onSave = { [weak self] in self?.saveImage() }
         overlayView.onDraw = { [weak self] in self?.toggleDrawing() }
-        overlayView.onHistory = { PinHistoryWindowController.shared.showHistory() }
+        overlayView.onHistory = { [weak self] in PinHistoryWindowController.shared.showHistory(on: self?.screen) }
 
         configureTextSelectionIfAvailable()
     }

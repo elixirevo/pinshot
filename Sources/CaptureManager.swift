@@ -132,6 +132,7 @@ class CaptureManager {
         completion: @escaping ((NSImage, NSRect)?) -> Void
     ) {
         guard overlayWindows.isEmpty, !isCapturing else { completion(nil); return }
+        PinHistoryWindowController.shared.dismiss()
         isCapturing = true
         pendingCompletion = completion
         if selectionMode == .screenshotEditor {

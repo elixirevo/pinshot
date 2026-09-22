@@ -145,7 +145,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func openHistory() {
-        PinHistoryWindowController.shared.showHistory()
+        DispatchQueue.main.async { PinHistoryWindowController.shared.showHistory() }
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
