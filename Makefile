@@ -10,21 +10,33 @@ ARCH ?= $(shell uname -m)
 ARCHS = arm64 x86_64
 DMG_PATH = $(DIST_DIR)/$(APP_NAME)-$(VERSION)-$(ARCH).dmg
 UNIVERSAL_DMG_PATH = $(DIST_DIR)/$(APP_NAME)-$(VERSION)-universal.dmg
-SWIFTC = swiftc
+# Full Xcode includes Intel compatibility libraries omitted by newer CLT releases.
+DEVELOPER_DIR ?= $(shell xcode-select -p)
+ifeq ($(DEVELOPER_DIR),/Library/Developer/CommandLineTools)
+DEVELOPER_DIR = /Applications/Xcode.app/Contents/Developer
+endif
+export DEVELOPER_DIR
+SWIFTC = xcrun swiftc
 SWIFT_FLAGS = -O -sdk $(shell xcrun --show-sdk-path --sdk macosx) -target $(ARCH)-apple-macos12.0
-VERSION ?= 1.0.0
-BUILD ?= 1
+SPARKLE_DIR = $(CURDIR)/.build/sparkle
+SPARKLE_FRAMEWORK = $(SPARKLE_DIR)/Sparkle.framework
+SPARKLE_FLAGS = -F "$(SPARKLE_DIR)" -framework Sparkle
+VERSION ?= $(shell /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' Info.plist)
+BUILD ?= $(shell /usr/libexec/PlistBuddy -c 'Print CFBundleVersion' Info.plist)
 
 all: $(APP_BUNDLE)
 
-.PHONY: test preview-screenshot-editor preview-pins preview-settings icons
+.PHONY: test preview-screenshot-editor preview-pins preview-settings icons sparkle
+
+sparkle:
+	./scripts/setup_sparkle.sh
 
 icons:
 	./make_icns.sh "$(OUT_DIR)/icons"
 
-test:
+test: sparkle
 	mkdir -p .build
-	$(SWIFTC) $(SWIFT_FLAGS) $(filter-out Sources/main.swift,$(wildcard Sources/*.swift)) $(wildcard Tests/*.swift) -o .build/ScreenshotTests
+	$(SWIFTC) $(SWIFT_FLAGS) $(SPARKLE_FLAGS) -Xlinker -rpath -Xlinker "$(SPARKLE_DIR)" $(filter-out Sources/main.swift,$(wildcard Sources/*.swift)) $(wildcard Tests/*.swift) -o .build/ScreenshotTests
 	.build/ScreenshotTests
 
 preview-screenshot-editor: test
@@ -36,15 +48,17 @@ preview-pins: test
 preview-settings: test
 	.build/ScreenshotTests --preview-settings
 
-$(APP_BUNDLE): $(SRC_DIR)/*.swift Info.plist Makefile make_icns.sh $(ICON_INPUTS)
+$(APP_BUNDLE): $(SRC_DIR)/*.swift Info.plist Makefile make_icns.sh scripts/setup_sparkle.sh $(ICON_INPUTS) | sparkle
 	mkdir -p $(APP_BUNDLE)/Contents/MacOS
 	mkdir -p $(APP_BUNDLE)/Contents/Resources
+	mkdir -p $(APP_BUNDLE)/Contents/Frameworks
+	ditto "$(SPARKLE_FRAMEWORK)" "$(APP_BUNDLE)/Contents/Frameworks/Sparkle.framework"
 	cp Info.plist $(APP_INFO_PLIST)
 	plutil -replace CFBundleShortVersionString -string "$(VERSION)" $(APP_INFO_PLIST)
 	plutil -replace CFBundleVersion -string "$(BUILD)" $(APP_INFO_PLIST)
 	./make_icns.sh "$(APP_BUNDLE)/Contents/Resources"
 	rm -f "$(APP_BUNDLE)/Contents/Resources/AppIcon.icns"
-	$(SWIFTC) $(SWIFT_FLAGS) $(SRC_DIR)/*.swift -o $(APP_BUNDLE)/Contents/MacOS/$(APP_NAME)
+	$(SWIFTC) $(SWIFT_FLAGS) $(SPARKLE_FLAGS) -Xlinker -rpath -Xlinker @executable_path/../Frameworks $(SRC_DIR)/*.swift -o $(APP_BUNDLE)/Contents/MacOS/$(APP_NAME)
 	touch "$(APP_BUNDLE)"
 
 release:

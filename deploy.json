@@ -1,0 +1,13 @@
+{
+  "info_plist": "Info.plist",
+  "repository": "elixirevo/pinshot",
+  "build_command": ["bash", "scripts/build_release.sh"],
+  "sign_identity": "Developer ID Application: Songwoo Yi (74DXCK2J5Q)",
+  "notary_profile": "menubox",
+  "sparkle_account": "pinshot-2026-09",
+  "sparkle_bin": ".build/sparkle/bin",
+  "feed_name": "appcast.xml",
+  "tap_path": "../tools/homebrew-tap",
+  "cask_token": "pinshot",
+  "cask_template": "homebrew/Casks/pinshot.rb"
+}

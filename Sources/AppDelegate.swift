@@ -1,4 +1,5 @@
 import Cocoa
+import Sparkle
 
 class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var statusItem: NSStatusItem!
@@ -7,10 +8,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var screenshotMenuItem: NSMenuItem?
     private var saveScreenshotMenuItem: NSMenuItem?
     private var closeAllMenuItem: NSMenuItem?
+    private let updaterController = SPUStandardUpdaterController(
+        startingUpdater: false, updaterDelegate: nil, userDriverDelegate: nil)
     
     func applicationDidFinishLaunching(_ aNotification: Notification) {
         setupStatusBar()
         setupHotkeys()
+        updaterController.startUpdater()
         PermissionGuideManager.shared.checkAndGuidePermissionsIfNeeded()
     }
 
@@ -62,6 +66,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
         settingsItem.target = self
         menu.addItem(settingsItem)
+        let updatesItem = NSMenuItem(title: "Check for Updates…",
+            action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)), keyEquivalent: "")
+        updatesItem.target = updaterController
+        menu.addItem(updatesItem)
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Quit PinShot", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         menu.delegate = self

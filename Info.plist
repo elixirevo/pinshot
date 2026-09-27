@@ -17,9 +17,23 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.0</string>
+    <string>1.2.0</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>1200</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>12.0</string>
+    <key>SUFeedURL</key>
+    <string>https://github.com/elixirevo/pinshot/releases/latest/download/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>TEd8hfVXCoIG1dOWOABFj6geMT9kM4OsZbaOSl7kej4=</string>
+    <key>SUEnableAutomaticChecks</key>
+    <true/>
+    <key>SUAutomaticallyUpdate</key>
+    <true/>
+    <key>SURequireSignedFeed</key>
+    <true/>
+    <key>SUVerifyUpdateBeforeExtraction</key>
+    <true/>
     <key>LSUIElement</key>
     <true/>
     <key>NSHighResolutionCapable</key>

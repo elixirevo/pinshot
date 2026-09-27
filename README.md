@@ -22,6 +22,7 @@
 * **Pixel Magnifier:** While selecting a save region, a zoom lens shows cursor-adjacent pixels with pixel coordinates.
 * **Opt+2 Macro Panel:** With `Option + 2`, a macro panel appears below the region so you can run a loop: screenshot -> after-shortcut -> post-delay -> configurable rest -> optional periodic shortcut -> repeat.
 * **Lightweight & Native:** Built purely with Swift and AppKit (No Electron, minimal resource usage).
+* **Automatic Updates:** Sparkle checks for updates and downloads them automatically. Use **Check for Updates…** in the menu to check manually. Releases are signed with Developer ID, notarized by Apple, and verified against signed update packages and feeds.
 * **Settings Window:** Manage launch at login, history, separate save folders, screenshot framing, and global shortcuts.
 * **Screenshot Frames:** Open **Frame…** for corner sliders, independent top/bottom/left/right padding, and background controls. Adjust all corners together or select one corner; the blue selection outline follows each corner's radius live. Capture outlines, saved-region indicators, and the magnifier share the same blue color. The embedded color picker supports presets, RGB sliders, and hex colors. Padding appears in the Frame preview and final output, not around the selected screen region. Changed values are remembered for subsequent captures.
 * **Pin History:** Capture & Pin automatically saves PNGs in the pinned screenshot folder and keeps a persistent history. Disable new history saves in Settings without losing previous captures.
@@ -93,6 +94,7 @@ brew install --cask pinshot
 
 * macOS 12.0 or later
 * Xcode 26 or later with Icon Composer (required to compile `pinshot.icon`)
+* Internet access for the first build to download Sparkle 2.10.0. The build verifies the pinned archive's SHA-256 and caches it under `.build/sparkle`.
 
 ### Build Steps
 
@@ -114,23 +116,24 @@ brew install --cask pinshot
    only the icons, run `make icons`. If Command Line Tools is selected, the
    icon script uses `/Applications/Xcode.app` automatically; for a different
    Xcode installation, set `DEVELOPER_DIR` to its `Contents/Developer` directory.
+   Swift compilation also uses this Xcode toolchain, including its Intel compatibility libraries.
 
    Release build with version metadata:
 
    ```bash
-   make release VERSION=1.0.0 BUILD=1 ARCH=arm64
+   make release VERSION=1.2.0 BUILD=1201 ARCH=arm64
    ```
 
    Build a universal app (`arm64 + x86_64`) and apply ad-hoc signing:
 
    ```bash
-   make sign-adhoc VERSION=1.0.1 BUILD=1
+   make sign-adhoc VERSION=1.2.0 BUILD=1201
    ```
 
    Build a distributable universal DMG (includes app, Applications link, and drag-to-install arrow layout):
 
    ```bash
-   make dmg-universal VERSION=1.0.1 BUILD=1
+   make dmg-universal VERSION=1.2.0 BUILD=1201
    ```
 
 3. The built application will be located at `build/PinShot.app`.
@@ -144,6 +147,12 @@ brew install --cask pinshot
 
 Run `make test` for crop coordinates, 1×/2× resolution, annotations and pin drawing, asymmetric padding and transparent corners, separate save destinations, history persistence and opt-out, FIFO retention at every limit, unlimited retention, folder changes, save/cleanup failure recovery, corrupt-index protection, history shelf placement, scrolling, live updates, and keyboard navigation, plus independent frame corners, legacy settings migration, capture-level color input handling, fixed capture ranges, hidden selection padding, and remembered frame values across captures. `make preview-screenshot-editor` opens the real editor with a generated test image, so its UI can be checked without Screen Recording permission. Preview exports go to `.build/editor-preview.png`. `make preview-pins` shows the pin controls and horizontal history shelf with temporary sample captures.
 
+### Distribution and updates
+
+Official releases provide separate Apple Silicon (`arm64`) and Intel (`x86_64`) DMGs. See [the release guide](docs/releasing.md) for Developer ID signing, notarization, Sparkle feed generation, and GitHub/Homebrew publishing.
+
+**1.1.2 and earlier do not include Sparkle.** Install 1.2.0 once through the DMG or run `brew update` and `brew upgrade --cask --greedy pinshot`; subsequent releases can update inside the app. Sparkle checks daily by default and can install downloaded updates when the app quits. Automatic downloads can be changed in Sparkle's update dialog.
+
 ## 🔒 Permissions
 
 When you run PinShot, it checks and guides these permissions:
@@ -155,7 +164,7 @@ Open **Settings… → Permissions** to see whether each permission is allowed. 
 
 `make preview-settings` opens this UI with simulated permissions, so it can be checked without granting or changing real macOS permissions.
 
-*Note: PinShot works entirely offline. No data or screenshots are ever sent over the network.*
+*Note: Screenshot capture and editing work offline. Update checks connect to GitHub to retrieve release information and packages; screenshots are never uploaded. Sparkle system profiling is disabled by default.*
 
 ## 🛠 Contributing
 
