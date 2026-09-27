@@ -11,7 +11,7 @@ cask "pinshot" do
   homepage "https://github.com/elixirevo/pinshot"
 
   auto_updates true
-  depends_on macos: ">= :monterey"
+  depends_on macos: :monterey
 
   app "PinShot.app"
 end
