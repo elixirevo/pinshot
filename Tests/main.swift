@@ -244,6 +244,11 @@ print("PASS: asymmetric padding, rounded alpha, Retina export, separate folders 
 try testHistoryRetention()
 try testPinInterface()
 try testScreenshotFrames()
+testPermissionSettings()
+
+if CommandLine.arguments.contains("--preview-settings") || Bundle.main.bundleIdentifier == "com.elixirevo.PinShot.SettingsPreview" {
+    previewPermissionSettings()
+}
 
 if CommandLine.arguments.contains("--preview-pins") || Bundle.main.bundleIdentifier == "com.elixirevo.PinShot.PinPreview" {
     try previewPinInterface()

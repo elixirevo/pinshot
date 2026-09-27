@@ -149,6 +149,11 @@ Run `make test` for crop coordinates, 1×/2× resolution, annotations and pin dr
 When you run PinShot, it checks and guides these permissions:
 
 1. **Screen Recording:** Required to capture the screen and window contents.
+2. **Accessibility:** Used for macro keyboard actions and dismissing overlays with Escape while another app is active.
+
+Open **Settings… → Permissions** to see whether each permission is allowed. **Request Access…** requests the selected permission and opens its System Settings pane if access still needs to be enabled. Allowed permissions have an **Open Settings…** button. Status refreshes automatically while Settings is open, when you return to the window, or when you click **Refresh Status**. If macOS asks you to quit and reopen PinShot, do so to apply the change.
+
+`make preview-settings` opens this UI with simulated permissions, so it can be checked without granting or changing real macOS permissions.
 
 *Note: PinShot works entirely offline. No data or screenshots are ever sent over the network.*
 

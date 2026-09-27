@@ -17,7 +17,7 @@ BUILD ?= 1
 
 all: $(APP_BUNDLE)
 
-.PHONY: test preview-screenshot-editor preview-pins icons
+.PHONY: test preview-screenshot-editor preview-pins preview-settings icons
 
 icons:
 	./make_icns.sh "$(OUT_DIR)/icons"
@@ -32,6 +32,9 @@ preview-screenshot-editor: test
 
 preview-pins: test
 	.build/ScreenshotTests --preview-pins
+
+preview-settings: test
+	.build/ScreenshotTests --preview-settings
 
 $(APP_BUNDLE): $(SRC_DIR)/*.swift Info.plist Makefile make_icns.sh $(ICON_INPUTS)
 	mkdir -p $(APP_BUNDLE)/Contents/MacOS

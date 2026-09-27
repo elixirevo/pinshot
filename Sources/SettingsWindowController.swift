@@ -9,6 +9,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let historyRetentionButton = NSPopUpButton(frame: .zero, pullsDown: false)
     private var directoryLabels: [CaptureDestination: NSTextField] = [:]
     private let appearanceView = ScreenshotAppearanceView()
+    private let permissions: PermissionManaging
+    private var permissionStatuses: [AppPermission: NSTextField] = [:]
+    private var permissionIcons: [AppPermission: NSImageView] = [:]
+    private var permissionButtons: [AppPermission: NSButton] = [:]
+    private let permissionSummary = NSTextField(labelWithString: "")
+    private var permissionRefreshTimer: Timer?
     private let shortcutRows: [(HotkeyAction, String)] = [
         (.screenshot, "Take Screenshot"),
         (.capture, "Capture & Pin"),
@@ -17,7 +23,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         (.closeAll, "Close All Pins")
     ]
 
-    init() {
+    init(permissions: PermissionManaging = PermissionGuideManager.shared) {
+        self.permissions = permissions
         let window = SettingsWindow(
             contentRect: NSRect(x: 0, y: 0, width: 640, height: 580),
             styleMask: [.titled, .closable], backing: .buffered, defer: false
@@ -41,10 +48,20 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         showWindow(nil)
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
+        startPermissionRefresh()
     }
 
     func windowDidBecomeKey(_ notification: Notification) {
         refreshSettings()
+        startPermissionRefresh()
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        stopPermissionRefresh()
+    }
+
+    deinit {
+        permissionRefreshTimer?.invalidate()
     }
 
     private func buildContent() {
@@ -135,6 +152,105 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         ])
         addTab("Screenshot Frame", stack: verticalStack([appearanceContainer], spacing: 0), to: tabs)
         addTab("Shortcuts", stack: verticalStack([section(title: "Keyboard Shortcuts", content: shortcuts), footer], spacing: 16), to: tabs)
+        addTab("Permissions", stack: permissionsContent(), to: tabs)
+    }
+
+    private func permissionsContent() -> NSStackView {
+        var rows: [NSView] = []
+        for (index, permission) in AppPermission.allCases.enumerated() {
+            let icon = NSImageView()
+            icon.setAccessibilityElement(false)
+            icon.widthAnchor.constraint(equalToConstant: 16).isActive = true
+            icon.heightAnchor.constraint(equalToConstant: 16).isActive = true
+            permissionIcons[permission] = icon
+            let status = NSTextField(labelWithString: "")
+            status.font = .systemFont(ofSize: 12, weight: .medium)
+            status.identifier = NSUserInterfaceItemIdentifier("permission.\(permission.rawValue).status")
+            permissionStatuses[permission] = status
+            let statusRow = NSStackView(views: [icon, status])
+            statusRow.orientation = .horizontal
+            statusRow.spacing = 6
+            let detail = NSTextField(wrappingLabelWithString: permission.detail)
+            detail.font = .systemFont(ofSize: 11)
+            detail.textColor = .secondaryLabelColor
+            let title = NSTextField(labelWithString: permission.title)
+            title.font = .systemFont(ofSize: 13, weight: .semibold)
+            let labels = verticalStack([title, detail, statusRow], spacing: 6)
+            let button = NSButton(title: "Request Access…", target: self, action: #selector(permissionClicked(_:)))
+            button.bezelStyle = .rounded
+            button.tag = index
+            button.identifier = NSUserInterfaceItemIdentifier("permission.\(permission.rawValue).action")
+            button.widthAnchor.constraint(equalToConstant: 138).isActive = true
+            permissionButtons[permission] = button
+            let permissionRow = NSStackView(views: [labels, button])
+            permissionRow.orientation = .horizontal
+            permissionRow.alignment = .centerY
+            permissionRow.distribution = .fill
+            permissionRow.spacing = 20
+            labels.setContentHuggingPriority(.defaultLow, for: .horizontal)
+            rows.append(permissionRow)
+            if index < AppPermission.allCases.count - 1 { rows.append(separator()) }
+        }
+        permissionSummary.font = .systemFont(ofSize: 12, weight: .medium)
+        permissionSummary.identifier = NSUserInterfaceItemIdentifier("permission.summary")
+        let refresh = NSButton(title: "Refresh Status", target: self, action: #selector(refreshPermissions))
+        refresh.bezelStyle = .rounded
+        refresh.identifier = NSUserInterfaceItemIdentifier("permission.refresh")
+        let note = NSTextField(wrappingLabelWithString:
+            "Enable PinShot in System Settings when prompted. Status updates automatically while this window is open. If macOS asks, quit and reopen PinShot to apply the change.")
+        note.font = .systemFont(ofSize: 12)
+        note.textColor = .secondaryLabelColor
+        return verticalStack([
+            section(title: "App Permissions", content: verticalStack(rows, spacing: 18)),
+            horizontalRow(label: permissionSummary, control: refresh), note
+        ], spacing: 18)
+    }
+
+    @objc private func permissionClicked(_ sender: NSButton) {
+        guard AppPermission.allCases.indices.contains(sender.tag) else { return }
+        let permission = AppPermission.allCases[sender.tag]
+        if permissions.isAuthorized(for: permission) {
+            permissions.openSettings(for: permission)
+        } else {
+            permissions.request(permission)
+        }
+        refreshPermissions()
+    }
+
+    @objc private func refreshPermissions() {
+        var allowedCount = 0
+        for permission in AppPermission.allCases {
+            let allowed = permissions.isAuthorized(for: permission)
+            if allowed { allowedCount += 1 }
+            let text = allowed ? "Allowed" : "Not Allowed"
+            permissionStatuses[permission]?.stringValue = text
+            permissionStatuses[permission]?.textColor = allowed ? .systemGreen : .secondaryLabelColor
+            permissionStatuses[permission]?.setAccessibilityLabel("\(permission.title): \(text)")
+            let icon = permissionIcons[permission]
+            icon?.image = NSImage(systemSymbolName: allowed ? "checkmark.circle.fill" : "exclamationmark.circle",
+                                 accessibilityDescription: nil)
+            icon?.contentTintColor = allowed ? .systemGreen : .systemOrange
+            let button = permissionButtons[permission]
+            button?.title = allowed ? "Open Settings…" : "Request Access…"
+            button?.setAccessibilityLabel(allowed ? "Open \(permission.title) settings" : "Request \(permission.title) access")
+        }
+        permissionSummary.stringValue = "\(allowedCount) of \(AppPermission.allCases.count) permissions allowed"
+    }
+
+    private func startPermissionRefresh() {
+        guard permissionRefreshTimer == nil else { return }
+        let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            guard self.window?.isVisible == true else { self.stopPermissionRefresh(); return }
+            self.refreshPermissions()
+        }
+        permissionRefreshTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func stopPermissionRefresh() {
+        permissionRefreshTimer?.invalidate()
+        permissionRefreshTimer = nil
     }
 
     private func addTab(_ title: String, stack: NSStackView, to tabs: NSTabView) {
@@ -297,6 +413,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             label.toolTip = path
         }
         appearanceView.reload()
+        refreshPermissions()
     }
 
     @objc private func toggleLaunchAtLogin() {

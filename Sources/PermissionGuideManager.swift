@@ -1,7 +1,38 @@
 import Cocoa
 import ApplicationServices
 
-final class PermissionGuideManager {
+enum AppPermission: String, CaseIterable {
+    case screenRecording, accessibility
+
+    var title: String {
+        switch self {
+        case .screenRecording: return "Screen Recording"
+        case .accessibility: return "Accessibility"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .screenRecording: return "Capture screenshots and pin images from your screen."
+        case .accessibility: return "Run macro keyboard actions and use Escape to dismiss overlays outside PinShot."
+        }
+    }
+
+    var privacyAnchor: String {
+        switch self {
+        case .screenRecording: return "Privacy_ScreenCapture"
+        case .accessibility: return "Privacy_Accessibility"
+        }
+    }
+}
+
+protocol PermissionManaging {
+    func isAuthorized(for permission: AppPermission) -> Bool
+    func request(_ permission: AppPermission)
+    func openSettings(for permission: AppPermission)
+}
+
+final class PermissionGuideManager: PermissionManaging {
     static let shared = PermissionGuideManager()
 
     private var isShowingGuide = false
@@ -40,7 +71,35 @@ final class PermissionGuideManager {
     }
 
     func hasScreenRecordingAuthorization() -> Bool {
-        CGPreflightScreenCaptureAccess()
+        isAuthorized(for: .screenRecording)
+    }
+
+    // Status checks never prompt or capture screen contents.
+    func isAuthorized(for permission: AppPermission) -> Bool {
+        switch permission {
+        case .screenRecording: return CGPreflightScreenCaptureAccess()
+        case .accessibility: return AXIsProcessTrusted()
+        }
+    }
+
+    func request(_ permission: AppPermission) {
+        guard !isAuthorized(for: permission) else {
+            openSettings(for: permission)
+            return
+        }
+        switch permission {
+        case .screenRecording:
+            _ = CGRequestScreenCaptureAccess()
+        case .accessibility:
+            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+            _ = AXIsProcessTrustedWithOptions(options)
+        }
+        // Previously denied requests may not show another prompt. Always provide a way to enable access.
+        if !isAuthorized(for: permission) { openSettings(for: permission) }
+    }
+
+    func openSettings(for permission: AppPermission) {
+        openPrivacyPane(anchor: permission.privacyAnchor)
     }
 
     func handleAuthorizedButUnavailableScreenCapture() {
@@ -57,15 +116,8 @@ final class PermissionGuideManager {
         showPermissionGuide(for: missing)
     }
 
-    private func missingPermissions() -> [String] {
-        var missing: [String] = []
-        if hasScreenRecordingAuthorization() == false {
-            missing.append("Screen Recording")
-        }
-        if AXIsProcessTrusted() == false {
-            missing.append("Accessibility")
-        }
-        return missing
+    private func missingPermissions() -> [AppPermission] {
+        AppPermission.allCases.filter { !isAuthorized(for: $0) }
     }
 
     private func isScreenRecordingReadyNow() -> Bool {
@@ -122,7 +174,7 @@ final class PermissionGuideManager {
         }
     }
 
-    private func showPermissionGuide(for missing: [String]) {
+    private func showPermissionGuide(for missing: [AppPermission]) {
         guard isShowingGuide == false else { return }
         isShowingGuide = true
 
@@ -133,7 +185,7 @@ final class PermissionGuideManager {
         PinShot needs permissions to work correctly.
 
         Missing:
-        \(missing.map { "- \($0)" }.joined(separator: "\n"))
+        \(missing.map { "- \($0.title)" }.joined(separator: "\n"))
 
         Click "Open Settings" and enable permissions for PinShot.
         """
@@ -144,15 +196,7 @@ final class PermissionGuideManager {
         isShowingGuide = false
         guard response == .alertFirstButtonReturn else { return }
 
-        if missing.contains("Screen Recording") {
-            openPrivacyPane(anchor: "Privacy_ScreenCapture")
-            _ = CGRequestScreenCaptureAccess()
-        }
-        if missing.contains("Accessibility") {
-            openPrivacyPane(anchor: "Privacy_Accessibility")
-            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-            _ = AXIsProcessTrustedWithOptions(options)
-        }
+        missing.forEach { request($0) }
     }
 
     private func openPrivacyPane(anchor: String) {
