@@ -10,7 +10,7 @@
 
 ## ✨ Features
 
-* **Screenshot Editor (`Option + A`):** Freeze the screen, drag a region or click a window, then adjust the selection before copying, saving, or pinning it.
+* **Screenshot Editor (`Option + A`):** Freeze the screen, drag a region or click a window once, then annotate, copy, save, or pin the locked selection.
 * **Screenshot Annotations:** Add rectangles, ellipses, arrows, freehand strokes, text, or mosaic with selectable colors and stroke widths. Undo and redo edits before exporting at the display's original pixel resolution.
 * **Instant Screen Freeze:** The exact moment you press the shortcut, the screen freezes, allowing you to capture transient states like hover menus or tooltips.
 * **Smart Window Selection:** Hover over any open window to highlight it, and simply **click** to capture the entire window perfectly.
@@ -23,7 +23,7 @@
 * **Opt+2 Macro Panel:** With `Option + 2`, a macro panel appears below the region so you can run a loop: screenshot -> after-shortcut -> post-delay -> configurable rest -> optional periodic shortcut -> repeat.
 * **Lightweight & Native:** Built purely with Swift and AppKit (No Electron, minimal resource usage).
 * **Settings Window:** Manage launch at login, history, separate save folders, screenshot framing, and global shortcuts.
-* **Screenshot Frames:** In the screenshot editor, use **Frame…** to adjust top/bottom/left/right padding, corner radius, background color, and transparency, with a live preview. Settings persist and apply to copying, saving, and pinning.
+* **Screenshot Frames:** Open **Frame…** for corner sliders, independent top/bottom/left/right padding, and background controls. Adjust all corners together or select one corner; the blue selection outline follows each corner's radius live. Capture outlines, saved-region indicators, and the magnifier share the same blue color. The embedded color picker supports presets, RGB sliders, and hex colors. Padding appears in the Frame preview and final output, not around the selected screen region. Changed values are remembered for subsequent captures.
 * **Pin History:** Capture & Pin automatically saves PNGs in the pinned screenshot folder and keeps a persistent history. Disable new history saves in Settings without losing previous captures.
 * **Draw on Pins:** Use the pencil button on a pin to draw with a pen, rectangles, ellipses, arrows, or mosaic. Choose a color and stroke width, undo/redo, and finish with Done or Escape. Edited pins update their history image.
 
@@ -31,7 +31,7 @@
 
 | Shortcut | Action |
 | --- | --- |
-| `Option + A` | Take screenshot with selection adjustment and annotation tools |
+| `Option + A` | Select a screenshot range once, then annotate or export |
 | `Option + 1` | Capture & Pin; automatically save to history when enabled |
 | `Option + 2` | Save screenshot to the macro folder (uses remembered region; first time asks for drag selection) |
 | `Option + 3` | Set screenshot region (drag to reselect and save immediately) |
@@ -46,11 +46,11 @@
 ### Screenshot editor
 
 1. Press `Option + A` or choose **Take Screenshot…** from the menu bar.
-2. Drag to select an area, or click a highlighted window. Drag inside the selection with the Select tool to move it; drag any of its eight handles to resize it. The size label shows output pixels.
-3. Choose a tool: `V` select, `R` rectangle, `O` ellipse, `A` arrow, `P` pen, `T` text, or `M` mosaic. Click to enter text and press Return to finish the label. Choose a color and stroke width in the toolbar.
-4. Press **Return**, `Command + C`, or double-click with the Select tool to copy. Use `Command + S` to save PNG to the screenshot editor folder, or click the pin button to keep it on screen.
+2. Drag to select an area, or click a highlighted window. Releasing the mouse locks that range for the entire capture session, including other displays. Moving, resizing, and selecting another range are disabled. The size label shows the captured region's pixels, excluding padding. To choose a different range, cancel with Esc and start a new capture.
+3. Choose a tool: `V` pointer, `R` rectangle, `O` ellipse, `A` arrow, `P` pen, `T` text, or `M` mosaic. Click to enter text and press Return to finish the label. Choose a color and stroke width in the toolbar.
+4. Press **Return**, `Command + C`, or double-click with the Pointer tool to copy. Use `Command + S` to save PNG to the screenshot editor folder, or click the pin button to keep it on screen.
 
-`Command + Z` undoes an annotation; `Shift + Command + Z` redoes it. Arrow keys move the crop by one point (`Shift` moves by ten), and `Command + A` selects the current display. Right-click to reselect; `Esc` cancels without copying or saving. Each capture selects a region on one display. Starting the editor stops any running capture macro.
+`Command + Z` undoes an annotation; `Shift + Command + Z` redoes it. Before selecting a range, `Command + A` can select and lock the current display. After selection, arrow keys, `Command + A`, and right-click leave the range unchanged. `Esc` cancels without copying or saving. Each capture selects a region on one display. Starting the editor stops any running capture macro.
 
 Change the global shortcut in **Settings… → Keyboard Shortcuts → Take Screenshot**. If iShot or another app owns `Option + A`, the menu and settings show **Shortcut Unavailable**; the menu action still works. Quit the conflicting app, then save the shortcut again or restart PinShot. Alternatively, choose a different shortcut. Existing `Option + 1/2/3` shortcuts keep their current behavior and settings.
 
@@ -64,7 +64,7 @@ Change the global shortcut in **Settings… → Keyboard Shortcuts → Take Scre
 | Capture & Pin (`Option + 1`) | `~/Pictures/PinShotCaptures/Pins` |
 | Saved-region and macro captures (`Option + 2/3`) | `~/Pictures/PinShotCaptures/Macro` |
 
-Changing folders affects new saves. Existing files are not moved. The screenshot editor's **Frame…** settings also appear under **Settings… → Screenshot Frame**. Padding and radius use output pixels, so Retina screenshots retain their original image resolution.
+Changing folders affects new saves. Existing files are not moved. The screenshot editor's frame settings also appear under **Settings… → Screenshot Frame**. Padding and rounded corners have separate enable switches; the four padding edges and four corner radii are independent. Frame changes are saved immediately and restored for every new capture, including after restarting PinShot. Padding is hidden in the selection overlay but remains visible in the Frame preview and final image. Values use output pixels, so Retina screenshots retain their original image resolution. Enter commits a frame input; Escape closes the frame panel while preserving the selection.
 
 Pin history is enabled by default. Under **Settings… → General**, turn **Save Capture & Pin history automatically** off to stop automatically saving new pins. Existing history remains available through **Screenshot History…** in the menu, the clock button on a pin, or **Open History…** in Settings. History appears below the menu bar on the current display, with the newest screenshots first in a horizontal strip. Browse with the trackpad, mouse wheel, or navigation buttons; click a thumbnail to reopen it as a pin. The left/right arrow keys select a capture, Return opens it, and **Show in Finder** reveals the selected file. Press Escape, click outside, or start a capture to dismiss history. PNGs live in the chosen pin folder; the history index lives in `~/Library/Application Support/PinShot/History`. Keep the saved files at their original locations to continue opening them from history.
 
@@ -142,7 +142,7 @@ brew install --cask pinshot
 
 ### Verification
 
-Run `make test` for crop coordinates, 1×/2× resolution, annotations and pin drawing, asymmetric padding and transparent corners, separate save destinations, history persistence and opt-out, FIFO retention at every limit, unlimited retention, folder changes, save/cleanup failure recovery, corrupt-index protection, and history shelf placement, scrolling, live updates, and keyboard navigation. `make preview-screenshot-editor` opens the real editor with a generated test image, so its UI can be checked without Screen Recording permission. Preview exports go to `.build/editor-preview.png`. `make preview-pins` shows the pin controls and horizontal history shelf with temporary sample captures.
+Run `make test` for crop coordinates, 1×/2× resolution, annotations and pin drawing, asymmetric padding and transparent corners, separate save destinations, history persistence and opt-out, FIFO retention at every limit, unlimited retention, folder changes, save/cleanup failure recovery, corrupt-index protection, history shelf placement, scrolling, live updates, and keyboard navigation, plus independent frame corners, legacy settings migration, capture-level color input handling, fixed capture ranges, hidden selection padding, and remembered frame values across captures. `make preview-screenshot-editor` opens the real editor with a generated test image, so its UI can be checked without Screen Recording permission. Preview exports go to `.build/editor-preview.png`. `make preview-pins` shows the pin controls and horizontal history shelf with temporary sample captures.
 
 ## 🔒 Permissions
 

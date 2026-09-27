@@ -198,6 +198,19 @@ class CaptureManager {
                             }
                         }
                     }
+                    editor.onSelectionCommitted = { [weak self, weak window] in
+                        guard let self, let window else { return }
+                        for overlay in self.overlayWindows {
+                            guard let other = overlay.contentView as? ScreenshotOverlayView else { continue }
+                            other.lockSelection()
+                            if overlay !== window {
+                                other.onActivate = { [weak window] in
+                                    window?.makeKeyAndOrderFront(nil)
+                                    window?.makeFirstResponder(window?.contentView)
+                                }
+                            }
+                        }
+                    }
                     editor.onFinish = { [weak self, weak window] image, rect, output in
                         guard let self, let window else { return }
                         let screenRect = window.convertToScreen(rect)
@@ -249,6 +262,8 @@ class CaptureManager {
         if localEventMonitor == nil {
             localEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                 if event.keyCode == 53 { // ESC
+                    if let editor = event.window?.contentView as? ScreenshotOverlayView,
+                       editor.dismissFramePanelIfNeeded() { return nil }
                     self?.complete(nil)
                     return nil
                 }

@@ -1,5 +1,9 @@
 import Cocoa
 
+enum CaptureOverlayAppearance {
+    static let borderColor = NSColor.systemTeal
+}
+
 struct WindowCandidate {
     let windowID: CGWindowID
     let viewRect: NSRect
@@ -34,6 +38,8 @@ class CaptureOverlayWindow: NSPanel {
 }
 
 class CaptureOverlayView: NSView {
+    // The screenshot editor draws its styled outline after the image and annotations.
+    var drawsSelectionBorder: Bool { true }
     var backgroundImage: NSImage?
     var enableMagnifier = false
     
@@ -116,9 +122,9 @@ class CaptureOverlayView: NSView {
         path.fill()
         
         // Draw selection border
-        if let rect = selectionRect {
+        if drawsSelectionBorder, let rect = selectionRect {
             NSGraphicsContext.current?.compositingOperation = .sourceOver
-            NSColor.white.setStroke()
+            CaptureOverlayAppearance.borderColor.setStroke()
             let borderPath = NSBezierPath(rect: rect)
             borderPath.lineWidth = 2.0
             borderPath.stroke()
@@ -261,7 +267,7 @@ class CaptureOverlayView: NSView {
 
         let lensBorder = NSBezierPath(roundedRect: lensRect, xRadius: 8, yRadius: 8)
         lensBorder.lineWidth = 2
-        NSColor.systemYellow.withAlphaComponent(0.95).setStroke()
+        CaptureOverlayAppearance.borderColor.setStroke()
         lensBorder.stroke()
     }
 

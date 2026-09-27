@@ -73,6 +73,7 @@ expect(plain.pixelsWide == 200 && plain.pixelsHigh == 120, "1× displays must re
 
 // Native view tests exercise region selection without sending events to other apps.
 let view = ScreenshotOverlayView(frame: NSRect(origin: .zero, size: size))
+view.screenshotStyle = ScreenshotStyle() // Geometry tests do not inherit the preview app's saved frame.
 view.sourceImage = source
 func mouse(_ type: NSEvent.EventType, _ point: NSPoint) -> NSEvent {
     NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: 0,
@@ -111,19 +112,44 @@ view.keyDown(with: key(9, "ㅍ")) // Select tool.
 view.mouseDown(with: mouse(.leftMouseDown, NSPoint(x: 240, y: 180)))
 view.mouseDragged(with: mouse(.leftMouseDragged, NSPoint(x: 280, y: 210)))
 view.mouseUp(with: mouse(.leftMouseUp, NSPoint(x: 280, y: 210)))
-expect(view.selection == NSRect(x: 40, y: 60, width: 240, height: 150), "Corner handles must resize the selection")
+expect(view.selection == selection && view.isSelectionLocked, "Completing a selection must lock its edges")
+for (start, end) in [(NSPoint(x: 80, y: 90), NSPoint(x: 120, y: 130)),
+                     (NSPoint(x: 300, y: 200), NSPoint(x: 380, y: 280))] {
+    view.mouseDown(with: mouse(.leftMouseDown, start))
+    view.mouseDragged(with: mouse(.leftMouseDragged, end))
+    view.mouseUp(with: mouse(.leftMouseUp, end))
+    expect(view.selection == selection, "Dragging inside or outside a committed selection must not change it")
+}
+view.keyDown(with: key(124, "", modifiers: .shift))
+view.keyDown(with: key(125, ""))
+_ = view.performKeyEquivalent(with: key(0, "a", modifiers: .command))
+view.rightMouseDown(with: mouse(.rightMouseDown, NSPoint(x: 300, y: 200)))
+view.resetSelection()
+expect(view.selection == selection, "Arrows, Command-A, right-click, and reset must preserve the committed range")
 var cancelled = false
 view.onCancel = { cancelled = true }
 view.keyDown(with: key(53, ""))
 expect(cancelled, "Escape must cancel the editor session")
-view.resetSelection()
-expect(view.selection == nil, "Reselecting must discard the previous selection")
-view.windowCandidates = [WindowCandidate(windowID: 1, viewRect: NSRect(x: -20, y: 20, width: 100, height: 100))]
-view.mouseDown(with: mouse(.leftMouseDown, NSPoint(x: 30, y: 40)))
-view.mouseUp(with: mouse(.leftMouseUp, NSPoint(x: 30, y: 40)))
-expect(view.selection == NSRect(x: 0, y: 20, width: 80, height: 100),
-       "Window selection must clip windows crossing the display edge")
-print("PASS: screenshot geometry, 1×/2× pixel export, annotation alignment, mosaic, region/window selection, resize, Korean shortcuts, undo/redo, Return, Escape, reset")
+let windowSelectionView = ScreenshotOverlayView(frame: NSRect(origin: .zero, size: size))
+windowSelectionView.windowCandidates = [WindowCandidate(windowID: 1, viewRect: NSRect(x: -20, y: 20, width: 100, height: 100))]
+windowSelectionView.mouseDown(with: mouse(.leftMouseDown, NSPoint(x: 30, y: 40)))
+windowSelectionView.mouseUp(with: mouse(.leftMouseUp, NSPoint(x: 30, y: 40)))
+expect(windowSelectionView.selection == NSRect(x: 0, y: 20, width: 80, height: 100) && windowSelectionView.isSelectionLocked,
+       "Window selection must clip at the display edge and immediately lock")
+let otherDisplay = ScreenshotOverlayView(frame: NSRect(origin: .zero, size: size))
+otherDisplay.lockSelection()
+otherDisplay.mouseDown(with: mouse(.leftMouseDown, NSPoint(x: 30, y: 40)))
+otherDisplay.mouseDragged(with: mouse(.leftMouseDragged, NSPoint(x: 180, y: 200)))
+otherDisplay.mouseUp(with: mouse(.leftMouseUp, NSPoint(x: 180, y: 200)))
+_ = otherDisplay.performKeyEquivalent(with: key(0, "a", modifiers: .command))
+expect(otherDisplay.selection == nil, "Once another display has selected a range, this display must not create one")
+let wholeDisplay = ScreenshotOverlayView(frame: NSRect(origin: .zero, size: size))
+wholeDisplay.mouseDown(with: mouse(.leftMouseDown, NSPoint(x: 20, y: 20)))
+_ = wholeDisplay.performKeyEquivalent(with: key(0, "a", modifiers: .command))
+wholeDisplay.mouseUp(with: mouse(.leftMouseUp, NSPoint(x: 30, y: 40)))
+expect(wholeDisplay.selection == wholeDisplay.bounds && wholeDisplay.isSelectionLocked,
+       "Command-A may select once, and an in-progress drag must not overwrite the committed range")
+print("PASS: screenshot geometry, 1×/2× pixel export, annotations, mosaic, one-time region/window selection, cross-display lock, Korean shortcuts, undo/redo, Return, Escape")
 
 // Frame rendering must preserve Retina pixels and independently honor every edge.
 var style = ScreenshotStyle()
@@ -217,17 +243,18 @@ print("PASS: asymmetric padding, rounded alpha, Retina export, separate folders 
 
 try testHistoryRetention()
 try testPinInterface()
+try testScreenshotFrames()
 
 if CommandLine.arguments.contains("--preview-pins") || Bundle.main.bundleIdentifier == "com.elixirevo.PinShot.PinPreview" {
     try previewPinInterface()
 }
 
-if CommandLine.arguments.contains("--preview") || Bundle.main.bundleIdentifier == "com.elixirevo.PinShot.EditorPreview" {
+if CommandLine.arguments.contains("--preview") || ["com.elixirevo.PinShot.EditorPreview", "com.elixirevo.PinShot.FramePreview"].contains(Bundle.main.bundleIdentifier ?? "") {
     app.setActivationPolicy(.regular)
     let frame = NSRect(x: 100, y: 100, width: 1050, height: 720)
     let window = CaptureOverlayWindow(contentRect: frame, screenshotEditor: true)
     window.styleMask = [.titled, .closable]
-    window.level = .normal
+    window.level = Bundle.main.bundleIdentifier == "com.elixirevo.PinShot.FramePreview" ? .screenSaver : .normal
     window.isFloatingPanel = false
     window.title = "PinShot Screenshot Editor Test"
     let editor = window.contentView as! ScreenshotOverlayView

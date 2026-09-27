@@ -3,13 +3,21 @@ import Carbon
 
 /// A frozen-screen editor. Coordinates stay in display points until the final pixel export.
 final class ScreenshotOverlayView: CaptureOverlayView, NSTextFieldDelegate {
+    override var drawsSelectionBorder: Bool { selection == nil }
     var sourceImage: CGImage?
+    var screenshotPreferences = CapturePreferences.shared {
+        didSet { screenshotStyle = screenshotPreferences.screenshotStyle }
+    }
     var onActivate: (() -> Void)?
+    var onSelectionCommitted: (() -> Void)?
     var onFinish: ((NSImage, NSRect, ScreenshotOutput) -> Void)?
-    var screenshotStyle = ScreenshotStyle()
-    private var appearancePopover: NSPopover?
+    var screenshotStyle = ScreenshotStyle() {
+        didSet { needsDisplay = true }
+    }
+    private var framePanel: ScreenshotChromeView?
 
     private(set) var selection: NSRect?
+    private(set) var isSelectionLocked = false
     private var tool: ScreenshotTool = .select
     private var color = NSColor.systemRed
     private var strokeWidth: CGFloat = 3
@@ -17,13 +25,10 @@ final class ScreenshotOverlayView: CaptureOverlayView, NSTextFieldDelegate {
     private var redoAnnotations: [ScreenshotAnnotation] = []
     private var pendingAnnotation: ScreenshotAnnotation?
     private var dragOrigin: NSPoint?
-    private var originalSelection: NSRect?
-    private var resizeHandle: Int?
     private var isSelecting = false
-    private var isMoving = false
     private var textField: NSTextField?
     private var textOrigin: NSPoint?
-    private let toolbar = NSVisualEffectView()
+    private let toolbar = ScreenshotChromeView()
     private var toolButtons: [NSButton] = []
     private var colorButtons: [NSButton] = []
     private var undoButton: NSButton!
@@ -32,6 +37,7 @@ final class ScreenshotOverlayView: CaptureOverlayView, NSTextFieldDelegate {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         enableMagnifier = true
+        screenshotStyle = screenshotPreferences.screenshotStyle
         setupToolbar()
         setAccessibilityLabel("Screenshot selection and annotation editor")
     }
@@ -46,35 +52,30 @@ final class ScreenshotOverlayView: CaptureOverlayView, NSTextFieldDelegate {
         super.draw(dirtyRect)
 
         if let selection {
-            NSGraphicsContext.saveGraphicsState()
-            NSBezierPath(rect: selection).addClip()
-            for annotation in annotations { annotation.draw() }
-            pendingAnnotation?.draw()
-            NSGraphicsContext.restoreGraphicsState()
+            drawStyledSelection(selection)
 
-            NSColor.systemTeal.setStroke()
-            let border = NSBezierPath(rect: selection)
-            border.lineWidth = 1.5
-            border.stroke()
-            for point in handles(for: selection) {
-                let handle = NSBezierPath(ovalIn: NSRect(x: point.x - 3.5, y: point.y - 3.5, width: 7, height: 7))
-                NSColor.white.setFill()
-                handle.fill()
-                NSColor.systemTeal.setStroke()
-                handle.stroke()
+            if let context = NSGraphicsContext.current?.cgContext {
+                context.saveGState()
+                context.setStrokeColor(CaptureOverlayAppearance.borderColor.cgColor)
+                context.setLineWidth(1.5)
+                context.addPath(selectionOutline(in: selection))
+                context.strokePath()
+                context.restoreGState()
             }
             let pixels = sourceImage.map { ScreenshotGeometry.pixelRect(selection, in: bounds.size, image: $0) }
-            let label = "\(Int(pixels?.width ?? selection.width)) × \(Int(pixels?.height ?? selection.height)) px"
+            let width = Int(pixels?.width ?? selection.width)
+            let height = Int(pixels?.height ?? selection.height)
+            let label = "\(width) × \(height) px"
             drawBadge(label, at: NSPoint(x: selection.minX, y: min(selection.maxY + 8, bounds.maxY - 30)))
         }
-        if selection == nil {
+        if selection == nil && !isSelectionLocked {
             drawBadge("Drag an area or click a window  ·  Esc to cancel", at: NSPoint(x: 20, y: 24))
         }
     }
 
     override func mouseMoved(with event: NSEvent) {
         cursorPoint = convert(event.locationInWindow, from: nil)
-        if selection == nil {
+        if selection == nil && !isSelectionLocked {
             highlightedWindow = windowCandidates.first { $0.viewRect.contains(cursorPoint!) }
             enableMagnifier = true
         }
@@ -87,39 +88,27 @@ final class ScreenshotOverlayView: CaptureOverlayView, NSTextFieldDelegate {
     }
 
     override func mouseDown(with event: NSEvent) {
+        if dismissFramePanelIfNeeded() { return }
+        // Other displays remain frozen once a capture has been selected.
+        if selection == nil && isSelectionLocked { onActivate?(); return }
         commitText()
-        onActivate?()
         window?.makeKeyAndOrderFront(nil)
         window?.makeFirstResponder(self)
         let point = ScreenshotGeometry.clamped(convert(event.locationInWindow, from: nil), to: bounds)
-        dragOrigin = point
-        originalSelection = selection
         cursorPoint = point
         if let selection {
-            if event.clickCount == 2, tool == .select, selection.contains(point) {
-                finish(.copy)
+            guard selection.contains(point) else { return }
+            if tool == .select {
+                if event.clickCount == 2 { finish(.copy) }
                 return
             }
-            if let index = handles(for: selection).firstIndex(where: { hypot($0.x - point.x, $0.y - point.y) <= 8 }) {
-                resizeHandle = index
-            } else if selection.contains(point) {
-                if tool == .select {
-                    isMoving = true
-                } else if tool == .text {
-                    beginText(at: point)
-                    return
-                } else {
-                    pendingAnnotation = ScreenshotAnnotation(tool: tool, points: [point], color: color, lineWidth: strokeWidth)
-                }
-            } else {
-                // Start another region only in selection mode; annotation clicks outside are ignored.
-                guard tool == .select else { return }
-                beginSelection(at: point)
-            }
+            if tool == .text { beginText(at: point); return }
+            dragOrigin = point
+            pendingAnnotation = ScreenshotAnnotation(tool: tool, points: [point], color: color, lineWidth: strokeWidth)
         } else {
+            onActivate?()
             beginSelection(at: point)
         }
-        toolbar.isHidden = true
         needsDisplay = true
     }
 
@@ -130,11 +119,6 @@ final class ScreenshotOverlayView: CaptureOverlayView, NSTextFieldDelegate {
         if isSelecting {
             selection = ScreenshotGeometry.rect(from: origin, to: point)
             enableMagnifier = false
-        } else if isMoving, let originalSelection {
-            selection = ScreenshotGeometry.moved(originalSelection,
-                by: NSSize(width: point.x - origin.x, height: point.y - origin.y), within: bounds)
-        } else if let handle = resizeHandle, let originalSelection {
-            selection = resized(originalSelection, handle: handle, point: point)
         } else if var annotation = pendingAnnotation, let selection {
             let endpoint = ScreenshotGeometry.clamped(point, to: selection)
             if annotation.tool == .pen {
@@ -165,20 +149,19 @@ final class ScreenshotOverlayView: CaptureOverlayView, NSTextFieldDelegate {
                 redoAnnotations.removeAll()
             }
         }
+        if isSelecting && selection != nil { commitSelection() }
         pendingAnnotation = nil
         dragOrigin = nil
-        originalSelection = nil
-        resizeHandle = nil
         isSelecting = false
-        isMoving = false
         highlightedWindow = nil
-        enableMagnifier = selection == nil
+        enableMagnifier = selection == nil && !isSelectionLocked
         refreshToolbar()
         needsDisplay = true
     }
 
     override func rightMouseDown(with event: NSEvent) {
-        if selection != nil { resetSelection() } else { onCancel?() }
+        if dismissFramePanelIfNeeded() { return }
+        if !isSelectionLocked { onCancel?() }
     }
 
     override func keyDown(with event: NSEvent) {
@@ -188,12 +171,34 @@ final class ScreenshotOverlayView: CaptureOverlayView, NSTextFieldDelegate {
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         // Let the field editor own normal text editing shortcuts while entering a label.
-        if textField != nil { return super.performKeyEquivalent(with: event) }
+        if event.keyCode == UInt16(kVK_Escape), dismissFramePanelIfNeeded() { return true }
+        if let fieldEditor = window?.firstResponder as? NSTextView, fieldEditor.isFieldEditor {
+            // This menu-bar app has no Edit menu to supply these native text shortcuts.
+            if event.modifierFlags.contains(.command), event.modifierFlags.intersection([.option, .control]).isEmpty {
+                switch event.keyCode {
+                case UInt16(kVK_ANSI_A): fieldEditor.selectAll(nil)
+                case UInt16(kVK_ANSI_C): fieldEditor.copy(nil)
+                case UInt16(kVK_ANSI_X): fieldEditor.cut(nil)
+                case UInt16(kVK_ANSI_V): fieldEditor.paste(nil)
+                case UInt16(kVK_ANSI_Z):
+                    if event.modifierFlags.contains(.shift) { fieldEditor.undoManager?.redo() }
+                    else { fieldEditor.undoManager?.undo() }
+                default: return false
+                }
+                return true
+            }
+            return false
+        }
+        if textField != nil || framePanel != nil || isFrameControlFocused { return super.performKeyEquivalent(with: event) }
         return handleKey(event) || super.performKeyEquivalent(with: event)
     }
 
     private func handleKey(_ event: NSEvent) -> Bool {
-        if event.keyCode == UInt16(kVK_Escape) { onCancel?(); return true }
+        if event.keyCode == UInt16(kVK_Escape) {
+            if !dismissFramePanelIfNeeded() { onCancel?() }
+            return true
+        }
+        if framePanel != nil || isFrameControlFocused { return false }
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         // Use hardware keys so editor shortcuts also work with Korean and other IMEs.
         let keysByCode: [UInt16: String] = [
@@ -208,9 +213,11 @@ final class ScreenshotOverlayView: CaptureOverlayView, NSTextFieldDelegate {
             case "s": finish(.save)
             case "z": flags.contains(.shift) ? redo() : undo()
             case "a":
+                guard !isSelectionLocked else { return true }
                 commitText()
                 onActivate?()
                 selection = bounds
+                commitSelection()
                 highlightedWindow = nil
                 enableMagnifier = false
                 refreshToolbar()
@@ -224,30 +231,20 @@ final class ScreenshotOverlayView: CaptureOverlayView, NSTextFieldDelegate {
             finish(.copy)
             return true
         }
-        if let selection {
-            let step: CGFloat = flags.contains(.shift) ? 10 : 1
-            let delta: NSSize
-            switch Int(event.keyCode) {
-            case kVK_LeftArrow: delta = NSSize(width: -step, height: 0)
-            case kVK_RightArrow: delta = NSSize(width: step, height: 0)
-            case kVK_UpArrow: delta = NSSize(width: 0, height: step)
-            case kVK_DownArrow: delta = NSSize(width: 0, height: -step)
-            default:
-                let keys: [String: ScreenshotTool] = ["v": .select, "r": .rectangle, "o": .ellipse,
-                    "a": .arrow, "p": .pen, "t": .text, "m": .mosaic]
-                guard let selectedTool = keys[key] else { return false }
-                selectTool(selectedTool)
-                return true
-            }
-            self.selection = ScreenshotGeometry.moved(selection, by: delta, within: bounds)
-            refreshToolbar()
-            needsDisplay = true
+        if selection != nil {
+            if [kVK_LeftArrow, kVK_RightArrow, kVK_UpArrow, kVK_DownArrow].contains(Int(event.keyCode)) { return true }
+            let keys: [String: ScreenshotTool] = ["v": .select, "r": .rectangle, "o": .ellipse,
+                "a": .arrow, "p": .pen, "t": .text, "m": .mosaic]
+            guard let selectedTool = keys[key] else { return false }
+            selectTool(selectedTool)
             return true
         }
         return false
     }
 
     func resetSelection() {
+        guard !isSelectionLocked else { return }
+        closeFramePanel()
         textField?.removeFromSuperview()
         textField = nil
         textOrigin = nil
@@ -255,6 +252,8 @@ final class ScreenshotOverlayView: CaptureOverlayView, NSTextFieldDelegate {
         annotations.removeAll()
         redoAnnotations.removeAll()
         pendingAnnotation = nil
+        dragOrigin = nil
+        isSelecting = false
         highlightedWindow = nil
         startPoint = nil
         currentPoint = nil
@@ -265,30 +264,32 @@ final class ScreenshotOverlayView: CaptureOverlayView, NSTextFieldDelegate {
     }
 
     private func beginSelection(at point: NSPoint) {
+        guard !isSelectionLocked else { return }
         resetSelection()
         dragOrigin = point
         isSelecting = true
     }
 
-    private func handles(for rect: NSRect) -> [NSPoint] {
-        [NSPoint(x: rect.minX, y: rect.minY), NSPoint(x: rect.midX, y: rect.minY),
-         NSPoint(x: rect.maxX, y: rect.minY), NSPoint(x: rect.maxX, y: rect.midY),
-         NSPoint(x: rect.maxX, y: rect.maxY), NSPoint(x: rect.midX, y: rect.maxY),
-         NSPoint(x: rect.minX, y: rect.maxY), NSPoint(x: rect.minX, y: rect.midY)]
+    func lockSelection() {
+        isSelectionLocked = true
+        isSelecting = false
+        dragOrigin = nil
+        highlightedWindow = nil
+        enableMagnifier = false
+        needsDisplay = true
     }
 
-    private func resized(_ rect: NSRect, handle: Int, point: NSPoint) -> NSRect {
-        var left = rect.minX, right = rect.maxX, bottom = rect.minY, top = rect.maxY
-        if [0, 6, 7].contains(handle) { left = min(point.x, right - 6) }
-        if [2, 3, 4].contains(handle) { right = max(point.x, left + 6) }
-        if [0, 1, 2].contains(handle) { bottom = min(point.y, top - 6) }
-        if [4, 5, 6].contains(handle) { top = max(point.y, bottom + 6) }
-        return NSRect(x: left, y: bottom, width: right - left, height: top - bottom).intersection(bounds)
+    private func commitSelection() {
+        guard selection != nil, !isSelectionLocked else { return }
+        lockSelection()
+        onSelectionCommitted?()
     }
 
     private func updateCursor(at point: NSPoint) {
-        if !toolbar.isHidden, toolbar.frame.contains(point) { NSCursor.arrow.set(); return }
-        if tool == .select, selection?.contains(point) == true { NSCursor.openHand.set() }
+        if (!toolbar.isHidden && toolbar.frame.contains(point)) || framePanel?.frame.contains(point) == true {
+            NSCursor.arrow.set(); return
+        }
+        if isSelectionLocked && (tool == .select || selection?.contains(point) != true) { NSCursor.arrow.set() }
         else if tool == .text, selection?.contains(point) == true { NSCursor.iBeam.set() }
         else { NSCursor.crosshair.set() }
     }
@@ -370,21 +371,97 @@ final class ScreenshotOverlayView: CaptureOverlayView, NSTextFieldDelegate {
     @objc private func pinClicked() { finish(.pin) }
     @objc private func cancelClicked() { onCancel?() }
     @objc private func frameClicked(_ sender: NSButton) {
+        if framePanel != nil { closeFramePanel(); return }
         commitText()
-        let appearance = ScreenshotAppearanceView()
+        let appearance = ScreenshotAppearanceView(preferences: screenshotPreferences)
+        appearance.configure(screenshotStyle)
         if let selection, let sourceImage {
             appearance.previewImage = ScreenshotRenderer.render(source: sourceImage, size: bounds.size,
                 selection: selection, annotations: annotations)
         }
         appearance.onChange = { [weak self] style in self?.screenshotStyle = style }
-        let controller = NSViewController()
-        controller.view = appearance
-        let popover = NSPopover()
-        popover.contentViewController = controller
-        popover.behavior = .transient
-        appearancePopover = popover
-        popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .maxY)
+        let panel = ScreenshotChromeView(frame: NSRect(x: 0, y: 0, width: 370, height: 420))
+        configureChrome(panel)
+        let title = NSTextField(labelWithString: "Screenshot Frame")
+        title.font = .systemFont(ofSize: 13, weight: .semibold)
+        title.frame = NSRect(x: 16, y: 391, width: 280, height: 20)
+        panel.addSubview(title)
+        let close = NSButton(image: NSImage(systemSymbolName: "xmark", accessibilityDescription: "Close frame controls")!, target: self, action: #selector(closeFramePanel))
+        close.bezelStyle = .circular
+        close.frame = NSRect(x: 332, y: 388, width: 26, height: 26)
+        close.setAccessibilityLabel("Close frame controls")
+        panel.addSubview(close)
+        appearance.frame.origin = .zero
+        panel.addSubview(appearance)
+        framePanel = panel
+        addSubview(panel)
+        positionFramePanel()
     }
+
+    private var isFrameControlFocused: Bool {
+        guard let responder = window?.firstResponder else { return false }
+        let input = (responder as? NSTextView)?.delegate as? NSView
+        guard let view = input ?? responder as? NSView else { return false }
+        return framePanel.map { view.isDescendant(of: $0) } == true
+    }
+
+    /// Used by the capture session's Escape monitor before it cancels the capture.
+    @discardableResult func dismissFramePanelIfNeeded() -> Bool {
+        if framePanel != nil { closeFramePanel(); return true }
+        if isFrameControlFocused { window?.makeFirstResponder(self); return true }
+        return false
+    }
+
+    @objc private func closeFramePanel() {
+        if framePanel != nil { window?.makeFirstResponder(self) }
+        framePanel?.removeFromSuperview()
+        framePanel = nil
+    }
+
+    private func configureChrome(_ view: NSVisualEffectView) {
+        view.material = .hudWindow
+        view.blendingMode = .withinWindow
+        view.state = .active
+        view.appearance = NSAppearance(named: .darkAqua)
+        view.wantsLayer = true
+        view.layer?.cornerRadius = 12
+        view.layer?.borderWidth = 1
+        view.layer?.borderColor = NSColor.white.withAlphaComponent(0.18).cgColor
+    }
+
+    private func positionFramePanel() {
+        guard let panel = framePanel else { return }
+        let aboveToolbar = toolbar.frame.maxY + 8
+        let y = aboveToolbar + panel.frame.height <= bounds.maxY - 8
+            ? aboveToolbar : toolbar.frame.minY - panel.frame.height - 8
+        panel.setFrameOrigin(NSPoint(
+            x: min(max(toolbar.frame.maxX - panel.frame.width, 8), max(8, bounds.width - panel.frame.width - 8)),
+            y: min(max(y, 8), max(8, bounds.height - panel.frame.height - 8))))
+    }
+
+    private func selectionOutline(in selection: NSRect) -> CGPath {
+        let scale = CGFloat(sourceImage?.width ?? Int(bounds.width)) / max(bounds.width, 1)
+        return ScreenshotStyler.roundedPath(in: selection, style: screenshotStyle, pixelScale: scale)
+    }
+
+    private func drawStyledSelection(_ selection: NSRect) {
+        NSGraphicsContext.saveGraphicsState()
+        // Re-dim the original rectangular hole, then reveal only the rounded image.
+        NSColor.black.withAlphaComponent(0.3).setFill()
+        selection.fill()
+        // Padding belongs to the Frame preview and exported image, never the selection overlay.
+        if let context = NSGraphicsContext.current?.cgContext {
+            context.addPath(selectionOutline(in: selection))
+            context.clip()
+        }
+        if let backgroundImage {
+            backgroundImage.draw(in: bounds, from: NSRect(origin: .zero, size: backgroundImage.size), operation: .copy, fraction: 1)
+        }
+        for annotation in annotations { annotation.draw() }
+        pendingAnnotation?.draw()
+        NSGraphicsContext.restoreGraphicsState()
+    }
+
     @objc private func undo() {
         commitText()
         if let annotation = annotations.popLast() { redoAnnotations.append(annotation) }
@@ -440,7 +517,7 @@ final class ScreenshotOverlayView: CaptureOverlayView, NSTextFieldDelegate {
         x += 36
         _ = makeButton("Save PNG to the screenshot folder (⌘S)", symbol: "square.and.arrow.down", action: #selector(saveClicked), x: x)
         x += 36
-        _ = makeButton("Copy screenshot (Return / ⌘C)", symbol: "checkmark", action: #selector(copyClicked), x: x)
+        _ = makeButton("스크린샷을 클립보드에 복사하고 닫기 (Enter / ⌘C)", symbol: "doc.on.doc", action: #selector(copyClicked), x: x)
         x += 36
         _ = makeButton("Cancel (Esc)", symbol: "xmark", action: #selector(cancelClicked), x: x)
 
@@ -469,7 +546,7 @@ final class ScreenshotOverlayView: CaptureOverlayView, NSTextFieldDelegate {
         let frameButton = NSButton(title: "Frame…", target: self, action: #selector(frameClicked(_:)))
         frameButton.bezelStyle = .rounded
         frameButton.frame = NSRect(x: 414, y: 7, width: 122, height: 28)
-        frameButton.setAccessibilityLabel("Screenshot padding and corners")
+        frameButton.setAccessibilityLabel("Screenshot padding, corners, and background")
         toolbar.addSubview(frameButton)
     }
 
@@ -502,6 +579,7 @@ final class ScreenshotOverlayView: CaptureOverlayView, NSTextFieldDelegate {
         if y < 8 { y = selection.maxY + 10 }
         if y + toolbar.frame.height > bounds.maxY - 8 { y = max(8, selection.minY + 10) }
         toolbar.setFrameOrigin(NSPoint(x: x, y: y))
+        positionFramePanel()
         for button in toolButtons {
             button.state = button.tag == tool.rawValue ? .on : .off
             button.layer?.backgroundColor = button.state == .on
@@ -526,4 +604,10 @@ final class ScreenshotOverlayView: CaptureOverlayView, NSTextFieldDelegate {
         NSBezierPath(roundedRect: rect, xRadius: 5, yRadius: 5).fill()
         (text as NSString).draw(at: NSPoint(x: rect.minX + 6, y: rect.minY + 4), withAttributes: attributes)
     }
+}
+
+/// Empty toolbar space must not start a new screenshot selection.
+private final class ScreenshotChromeView: NSVisualEffectView {
+    override func mouseDown(with event: NSEvent) {}
+    override func rightMouseDown(with event: NSEvent) {}
 }

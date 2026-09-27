@@ -4,7 +4,7 @@ enum ScreenshotTool: Int, CaseIterable {
     case select, rectangle, ellipse, arrow, pen, text, mosaic
 
     var title: String {
-        ["Select (V)", "Rectangle (R)", "Ellipse (O)", "Arrow (A)",
+        ["Pointer (V)", "Rectangle (R)", "Ellipse (O)", "Arrow (A)",
          "Pen (P)", "Text (T)", "Mosaic (M)"][rawValue]
     }
 

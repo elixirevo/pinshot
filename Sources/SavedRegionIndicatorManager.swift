@@ -165,7 +165,7 @@ private final class SavedRegionBorderStripWindow: NSPanel {
 
 private final class SavedRegionBorderStripView: NSView {
     override func draw(_ dirtyRect: NSRect) {
-        NSColor.systemYellow.withAlphaComponent(0.95).setFill()
+        CaptureOverlayAppearance.borderColor.setFill()
         NSBezierPath(rect: bounds).fill()
     }
 }
