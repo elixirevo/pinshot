@@ -170,6 +170,12 @@ final class CapturePreferences {
     }
 
     private func directoryKey(_ destination: CaptureDestination) -> String { "save.directory.\(destination.rawValue)" }
+
+    func restoreDefaults() {
+        for key in ["screenshot.style.v1", "pins.history.enabled", "pins.history.limit"] + CaptureDestination.allCases.map(directoryKey) {
+            defaults.removeObject(forKey: key)
+        }
+    }
 }
 
 enum ScreenshotStyler {

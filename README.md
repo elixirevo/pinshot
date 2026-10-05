@@ -40,8 +40,8 @@
 | `Esc` | Cancel capture mode / hide saved-region overlay |
 
 *Pinned screenshots have native circular buttons for Close, Copy, Save, Draw, and History, with glass styling on macOS 26 and later. Drag the image to move it when drawing mode is off.*
-*Open **Settings…** from the PinShot menu to change global shortcuts or restore their defaults under **Keyboard Shortcuts**. Click the current shortcut, press the new keys, and choose **Save**.*
-*Under **General**, use **Set Region…** to reselect the saved region and save a screenshot immediately. You can also enable **Launch at Login** (macOS 13 or later).*
+*Open **Settings…** from the PinShot menu to change global shortcuts or restore their defaults under **Keyboard Shortcuts**. Click the current shortcut and press the new keys. New shortcuts require Command, Control or Option; existing saved shortcuts remain unchanged.*
+*Under **Features**, use **Set Region…** to reselect the saved region and save a screenshot immediately. **General** includes Launch at Login, language and appearance.*
 *Use `Play Macro` / `Stop Macro` in the Opt+2 macro panel to start or stop loop playback.*
 
 ### Screenshot editor
@@ -57,7 +57,7 @@ Change the global shortcut in **Settings… → Keyboard Shortcuts → Take Scre
 
 ### Save folders and history
 
-**Settings… → Save Locations** provides independent folder pickers for:
+**Settings… → Features → Save Locations** provides independent folder pickers for:
 
 | Capture type | Default folder |
 | --- | --- |
@@ -65,17 +65,19 @@ Change the global shortcut in **Settings… → Keyboard Shortcuts → Take Scre
 | Capture & Pin (`Option + 1`) | `~/Pictures/PinShotCaptures/Pins` |
 | Saved-region and macro captures (`Option + 2/3`) | `~/Pictures/PinShotCaptures/Macro` |
 
-Changing folders affects new saves. Existing files are not moved. The screenshot editor's frame settings also appear under **Settings… → Screenshot Frame**. Padding and rounded corners have separate enable switches; the four padding edges and four corner radii are independent. Frame changes are saved immediately and restored for every new capture, including after restarting PinShot. Padding is hidden in the selection overlay but remains visible in the Frame preview and final image. Values use output pixels, so Retina screenshots retain their original image resolution. Enter commits a frame input; Escape closes the frame panel while preserving the selection.
+Changing folders affects new saves. Existing files are not moved. The screenshot editor's frame settings also appear under **Settings… → Features → Screenshot Frame**. Padding and rounded corners have separate enable switches; the four padding edges and four corner radii are independent. Frame changes are saved immediately and restored for every new capture, including after restarting PinShot. Padding is hidden in the selection overlay but remains visible in the Frame preview and final image. Values use output pixels, so Retina screenshots retain their original image resolution. Enter commits a frame input; Escape closes the frame panel while preserving the selection.
 
-Pin history is enabled by default. Under **Settings… → General**, turn **Save Capture & Pin history automatically** off to stop automatically saving new pins. Existing history remains available through **Screenshot History…** in the menu, the clock button on a pin, or **Open History…** in Settings. History appears below the menu bar on the current display, with the newest screenshots first in a horizontal strip. Browse with the trackpad, mouse wheel, or navigation buttons; click a thumbnail to reopen it as a pin. The left/right arrow keys select a capture, Return opens it, and **Show in Finder** reveals the selected file. Press Escape, click outside, or start a capture to dismiss history. PNGs live in the chosen pin folder; the history index lives in `~/Library/Application Support/PinShot/History`. Keep the saved files at their original locations to continue opening them from history.
+Pin history is enabled by default. Under **Settings… → Features**, turn **Save Capture & Pin history automatically** off to stop automatically saving new pins. Existing history remains available through **Screenshot History…** in the menu, the clock button on a pin, or **Open History…** in Settings. History appears below the menu bar on the current display, with the newest screenshots first in a horizontal strip. Browse with the trackpad, mouse wheel, or navigation buttons; click a thumbnail to reopen it as a pin. The left/right arrow keys select a capture, Return opens it, and **Show in Finder** reveals the selected file. Press Escape, click outside, or start a capture to dismiss history. PNGs live in the chosen pin folder; the history index lives in `~/Library/Application Support/PinShot/History`. Keep the saved files at their original locations to continue opening them from history.
 
-**History Limit** defaults to **30 captures**. Choose **10, 30, 50, 100**, or **Never Delete** in **Settings… → General**. After each new capture is saved successfully, excess history entries and their original PNG files are deleted oldest first (FIFO). A lower limit takes effect on the next saved capture; changing the setting or turning history off does not immediately remove existing captures. Manually saved copies are kept. If cleanup fails, PinShot reports the error and retries the remaining old entries after the next capture.
+**History Limit** defaults to **30 captures**. Choose **10, 30, 50, 100**, or **Never Delete** in **Settings… → Features**. After each new capture is saved successfully, excess history entries and their original PNG files are deleted oldest first (FIFO). A lower limit takes effect on the next saved capture; changing the setting or turning history off does not immediately remove existing captures. Manually saved copies are kept. If cleanup fails, PinShot reports the error and retries the remaining old entries after the next capture.
+
+Use **Clear History…** beside **Open History…** to permanently remove all history and its automatically saved PNG files, including files in previous save folders. A confirmation appears before deletion. Manually saved copies and open pins are kept. The history window refreshes immediately; any files that could not be deleted stay indexed so you can retry. Clearing also works when automatic history saving is turned off.
 
 Use **Done**, Escape, or close the pin to finish drawing and update its saved history image. `Command + Z` and `Shift + Command + Z` undo and redo while drawing. Copy and Save include the current drawing and exclude the controls. Save uses the pin folder for Capture & Pin, or the screenshot folder for pins created by the screenshot editor.
 
 ## 🚀 Installation & Build
 
-PinShot is built using a simple `Makefile`. No heavy Xcode project setup is required.
+PinShot is built with Swift Package Manager and packaged as an app by `Makefile`. No Xcode project setup is required.
 
 ### Install via Homebrew
 
@@ -92,9 +94,10 @@ brew install --cask pinshot
 
 ### Prerequisites
 
-* macOS 12.0 or later
+* macOS 13.0 or later
 * Xcode 26 or later with Icon Composer (required to compile `pinshot.icon`)
-* Internet access for the first build to download Sparkle 2.10.0. The build verifies the pinned archive's SHA-256 and caches it under `.build/sparkle`.
+* The MacAppEssentials checkout at `../tools/library`, or set `MAC_APP_ESSENTIALS_PATH` to its location. The package and its `Integrations/MacAppUpdatesSparkle` subpackage must stay together.
+* Internet access for the first build to resolve the pinned Sparkle 2.10.0 package. SwiftPM verifies and caches its binary artifact.
 
 ### Build Steps
 
@@ -121,7 +124,7 @@ brew install --cask pinshot
    Release build with version metadata:
 
    ```bash
-   make release VERSION=1.2.0 BUILD=1201 ARCH=arm64
+   make release VERSION=1.3.0 BUILD=1301 ARCH=arm64
    ```
 
    Build a universal app (`arm64 + x86_64`) and apply ad-hoc signing:
@@ -155,16 +158,29 @@ Official releases provide separate Apple Silicon (`arm64`) and Intel (`x86_64`) 
 
 ## 🔒 Permissions
 
-When you run PinShot, it checks and guides these permissions:
+The first-run guide and **Settings… → Permissions** share the same permission controls. They read status without prompting. Permission requests only happen after you choose the request button and confirm the guidance:
 
 1. **Screen Recording:** Required to capture the screen and window contents.
 2. **Accessibility:** Used for macro keyboard actions and dismissing overlays with Escape while another app is active.
 
-Open **Settings… → Permissions** to see whether each permission is allowed. **Request Access…** requests the selected permission and opens its System Settings pane if access still needs to be enabled. Allowed permissions have an **Open Settings…** button. Status refreshes automatically while Settings is open, when you return to the window, or when you click **Refresh Status**. If macOS asks you to quit and reopen PinShot, do so to apply the change.
+Open **Settings… → Permissions** to see each status. **Request Access…** opens shared guidance before the native request; **Open System Settings…** remains available for denied permissions. Returning to the app or using **Refresh Status** reads status again. Screen Recording is required for capture; Accessibility is optional for keyboard macros and global Escape. If macOS requires restarting PinShot, quit and reopen it.
+
 
 `make preview-settings` opens this UI with simulated permissions, so it can be checked without granting or changing real macOS permissions.
 
 *Note: Screenshot capture and editing work offline. Update checks connect to GitHub to retrieve release information and packages; screenshots are never uploaded. Sparkle system profiling is disabled by default.*
+
+## First run, settings and legal documents
+
+PinShot uses MacAppEssentials for its settings window, status menu, standard app menu, language, login items, permission guidance, lifecycle and Sparkle adapter. It remains a menu-bar app when settings or onboarding is open. Reopening PinShot from Finder opens the unfinished setup or settings.
+
+The first run shows capture and pin guides with screenshots taken from PinShot's actual UI, a privacy explanation, versioned Terms of Use and individual permission pages. Terms acceptance is explicit and stored separately from onboarding completion. Capture shortcuts and updates start only after acceptance and finishing or dismissing the remaining setup. A changed Terms version uses a separate agreement window. Closing before agreement exits without accepting. Permissions are not required to finish onboarding.
+
+**Settings → Help & Support** provides **Show Introduction…**, read-only Korean/English Terms and Privacy Policy, help, private email support and GitHub issues. Documents are bundled for offline reading; reading or copying them does not record agreement. Common settings and onboarding use the same System/English/Korean language preference, applied after relaunch. The capture editor retains its app-specific controls.
+
+**General → Restore Defaults** offers scoped capture-preference and shortcut resets with confirmation. Resetting preferences does not delete images, change OS permissions or erase agreement/onboarding records. The restored history limit applies after the next saved capture.
+
+See [the integration notes](docs/mac-app-essentials.md) for module ownership, build/resource details, verification and legal sources. `make preview-onboarding` uses simulated permissions and temporary agreement records.
 
 ## 🛠 Contributing
 
@@ -179,3 +195,9 @@ Contributions are welcome! If you have ideas for new features, bug fixes, or imp
 ## 📄 License
 
 Distributed under the MIT License. See `LICENSE` for more information.
+
+### Optional crash reports
+
+**Settings → General → Diagnostics → Send crash reports** enables optional Sentry crash reporting after restarting PinShot. It is off by default and also available during onboarding. It sends technical fatal-exception details to help diagnose crashes; screenshots are not attached. Changes, including turning reporting off, apply on the next launch. Read **Help & Support → Privacy Policy** for data, cache, retention and international-processing details.
+
+Developers: the app uses the shared `MacAppDiagnosticsSentry` adapter and its public bundled configuration. Release symbols are saved beside the app as `PinShot.app.dSYM`; upload each build with `python3 scripts/upload_sentry_symbols.py build/PinShot.app.dSYM`. See [integration notes](docs/mac-app-essentials.md#sentry).

@@ -1,0 +1,8 @@
+{
+  "appIdentifier": "com.elixirevo.PinShot",
+  "dsn": "https://26ee24d8346368e96e3a71006e6e7c6a@o4512192516390912.ingest.us.sentry.io/4512201977167872",
+  "environment": "production",
+  "organization": "elixirevo",
+  "project": "pinshot",
+  "schemaVersion": 1
+}

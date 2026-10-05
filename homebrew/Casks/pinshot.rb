@@ -1,7 +1,7 @@
 cask "pinshot" do
   arch arm: "arm64", intel: "x86_64"
 
-  version "1.2.0"
+  version "1.3.0"
   sha256 arm:   "REPLACED_DURING_PREPARE",
          intel: "REPLACED_DURING_PREPARE"
 
@@ -11,7 +11,7 @@ cask "pinshot" do
   homepage "https://github.com/elixirevo/pinshot"
 
   auto_updates true
-  depends_on macos: :monterey
+  depends_on macos: :ventura
 
   app "PinShot.app"
 end

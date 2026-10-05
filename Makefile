@@ -16,17 +16,12 @@ ifeq ($(DEVELOPER_DIR),/Library/Developer/CommandLineTools)
 DEVELOPER_DIR = /Applications/Xcode.app/Contents/Developer
 endif
 export DEVELOPER_DIR
-SWIFTC = xcrun swiftc
-SWIFT_FLAGS = -O -sdk $(shell xcrun --show-sdk-path --sdk macosx) -target $(ARCH)-apple-macos12.0
-SPARKLE_DIR = $(CURDIR)/.build/sparkle
-SPARKLE_FRAMEWORK = $(SPARKLE_DIR)/Sparkle.framework
-SPARKLE_FLAGS = -F "$(SPARKLE_DIR)" -framework Sparkle
 VERSION ?= $(shell /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' Info.plist)
 BUILD ?= $(shell /usr/libexec/PlistBuddy -c 'Print CFBundleVersion' Info.plist)
 
 all: $(APP_BUNDLE)
 
-.PHONY: test preview-screenshot-editor preview-pins preview-settings icons sparkle
+.PHONY: all test preview-screenshot-editor preview-pins preview-settings preview-onboarding icons sparkle release universal sign-adhoc clean
 
 sparkle:
 	./scripts/setup_sparkle.sh
@@ -34,34 +29,32 @@ sparkle:
 icons:
 	./make_icns.sh "$(OUT_DIR)/icons"
 
-test: sparkle
-	mkdir -p .build
-	$(SWIFTC) $(SWIFT_FLAGS) $(SPARKLE_FLAGS) -Xlinker -rpath -Xlinker "$(SPARKLE_DIR)" $(filter-out Sources/main.swift,$(wildcard Sources/*.swift)) $(wildcard Tests/*.swift) -o .build/ScreenshotTests
-	.build/ScreenshotTests
+test:
+	ARCH=$(ARCH) CONFIGURATION=debug ./scripts/build_swift.sh ScreenshotTests
 
-preview-screenshot-editor: test
-	.build/ScreenshotTests --preview
+preview-screenshot-editor:
+	ARCH=$(ARCH) CONFIGURATION=debug ./scripts/build_swift.sh ScreenshotTests --preview
 
-preview-pins: test
-	.build/ScreenshotTests --preview-pins
+preview-pins:
+	ARCH=$(ARCH) CONFIGURATION=debug ./scripts/build_swift.sh ScreenshotTests --preview-pins
 
-preview-settings: test
-	.build/ScreenshotTests --preview-settings
+preview-onboarding:
+	ARCH=$(ARCH) CONFIGURATION=debug ./scripts/build_swift.sh ScreenshotTests --preview-onboarding
 
-$(APP_BUNDLE): $(SRC_DIR)/*.swift Info.plist Makefile make_icns.sh scripts/setup_sparkle.sh $(ICON_INPUTS) | sparkle
-	mkdir -p $(APP_BUNDLE)/Contents/MacOS
+preview-settings:
+	ARCH=$(ARCH) CONFIGURATION=debug ./scripts/build_swift.sh ScreenshotTests --preview-settings
+
+.PHONY: $(APP_BUNDLE)
+$(APP_BUNDLE):
 	mkdir -p $(APP_BUNDLE)/Contents/Resources
-	mkdir -p $(APP_BUNDLE)/Contents/Frameworks
-	ditto "$(SPARKLE_FRAMEWORK)" "$(APP_BUNDLE)/Contents/Frameworks/Sparkle.framework"
 	cp Info.plist $(APP_INFO_PLIST)
 	plutil -replace CFBundleShortVersionString -string "$(VERSION)" $(APP_INFO_PLIST)
 	plutil -replace CFBundleVersion -string "$(BUILD)" $(APP_INFO_PLIST)
 	./make_icns.sh "$(APP_BUNDLE)/Contents/Resources"
-	rm -f "$(APP_BUNDLE)/Contents/Resources/AppIcon.icns"
-	$(SWIFTC) $(SWIFT_FLAGS) $(SPARKLE_FLAGS) -Xlinker -rpath -Xlinker @executable_path/../Frameworks $(SRC_DIR)/*.swift -o $(APP_BUNDLE)/Contents/MacOS/$(APP_NAME)
+	ARCH=$(ARCH) OUT_DIR=$(OUT_DIR) ./scripts/build_swift.sh PinShot
 	touch "$(APP_BUNDLE)"
 
-release:
+release: sparkle
 	@if [ -z "$(VERSION)" ] || [ -z "$(BUILD)" ]; then \
 		echo "Usage: make release VERSION=1.0.0 BUILD=1 ARCH=arm64|x86_64"; \
 		exit 1; \
@@ -88,6 +81,9 @@ universal:
 		artifacts/arm64/$(APP_NAME).app/Contents/MacOS/$(APP_NAME) \
 		artifacts/x86_64/$(APP_NAME).app/Contents/MacOS/$(APP_NAME) \
 		-output $(APP_BUNDLE)/Contents/MacOS/$(APP_NAME)
+	ditto artifacts/arm64/$(APP_NAME).app.dSYM $(OUT_DIR)/$(APP_NAME).app.dSYM
+	lipo -create artifacts/arm64/$(APP_NAME).app.dSYM/Contents/Resources/DWARF/$(APP_NAME) artifacts/x86_64/$(APP_NAME).app.dSYM/Contents/Resources/DWARF/$(APP_NAME) -output $(OUT_DIR)/$(APP_NAME).app.dSYM/Contents/Resources/DWARF/$(APP_NAME)
+	ditto artifacts/x86_64/$(APP_NAME).app.dSYM/Contents/Resources/Relocations $(OUT_DIR)/$(APP_NAME).app.dSYM/Contents/Resources/Relocations
 	@echo "Built universal app: $(APP_BUNDLE)"
 
 sign-adhoc: universal

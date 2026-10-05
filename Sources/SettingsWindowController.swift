@@ -1,548 +1,268 @@
 import Cocoa
+import SwiftUI
+import Carbon
+import MacAppCore
+import MacAppSettings
 
-final class SettingsWindowController: NSWindowController, NSWindowDelegate {
-    private let launchAtLoginButton = NSButton(checkboxWithTitle: "Launch at Login", target: nil, action: nil)
-    private let loginDescription = NSTextField(wrappingLabelWithString: "")
-    private var shortcutButtons: [HotkeyAction: NSButton] = [:]
-    private var shortcutWarnings: [HotkeyAction: NSTextField] = [:]
-    private let historyEnabledButton = NSButton(checkboxWithTitle: "Save Capture & Pin history automatically", target: nil, action: nil)
-    private let historyRetentionButton = NSPopUpButton(frame: .zero, pullsDown: false)
-    private var directoryLabels: [CaptureDestination: NSTextField] = [:]
-    private let appearanceView = ScreenshotAppearanceView()
-    private let permissions: PermissionManaging
-    private var permissionStatuses: [AppPermission: NSTextField] = [:]
-    private var permissionIcons: [AppPermission: NSImageView] = [:]
-    private var permissionButtons: [AppPermission: NSButton] = [:]
-    private let permissionSummary = NSTextField(labelWithString: "")
-    private var permissionRefreshTimer: Timer?
-    private let shortcutRows: [(HotkeyAction, String)] = [
-        (.screenshot, "Take Screenshot"),
-        (.capture, "Capture & Pin"),
-        (.saveScreenshot, "Capture & Save Screenshot"),
-        (.setScreenshotRegion, "Set Screenshot Region"),
+func appText(_ key: String) -> String {
+    AppLocalizer.current.string(key, bundle: .module)
+}
+
+@MainActor
+final class PinShotSettings {
+    let navigation = SettingsNavigation()
+    let permissions: PermissionSettingsModel
+    let shortcuts: ShortcutSettingsModel
+    let preferences: FeaturePreferences
+    let window: MacAppSettings.SettingsWindowController
+
+    init(identity: SettingsIdentity, permissions: PermissionSettingsModel,
+         updates: UpdateSettingsModel, legal: LegalDocuments,
+         diagnostics: CrashReportingPreference? = nil,
+         reviewOnboarding: @escaping () -> Void, setRegion: @escaping () -> Void,
+         preview: Bool = false) throws {
+        self.permissions = permissions
+        let preferences = FeaturePreferences(preview: preview)
+        self.preferences = preferences
+        let shortcuts = ShortcutSettingsModel(HotkeyAction.settingsActions.map { action, title in
+            SettingsShortcutAction(id: title, title: appText(title),
+                read: { HotkeyManager.shared.shortcut(for: action).settingsShortcut },
+                validate: { value in
+                    guard value != nil else { throw SettingsAdapterError.shortcutRequired }
+                }, write: { value in
+                    guard let value else { throw SettingsAdapterError.shortcutRequired }
+                    try HotkeyManager.shared.updateShortcut(action: action, shortcut: .init(value))
+                })
+        }, recordingChanged: { active in
+            if active { HotkeyManager.shared.beginShortcutRecording() }
+            else { HotkeyManager.shared.endShortcutRecording() }
+        })
+        self.shortcuts = shortcuts
+        let reset = try SettingsResetModel(actions: [
+            SettingsResetAction(id: "capture", title: appText("Capture Preferences"),
+                detail: appText("Restore history saving, the 30-capture limit, save folders and screenshot frame. Existing files are kept; the history limit applies after the next saved capture.")) {
+                preferences.restoreCaptureDefaults()
+            },
+            SettingsResetAction(id: "shortcuts", title: appText("Keyboard Shortcuts"),
+                detail: appText("Restore Option+A, Option+1/2/3 and Command+Option+W. If registration fails, keep the previous shortcuts.")) {
+                try HotkeyManager.shared.resetAllShortcuts()
+                shortcuts.refresh()
+            }
+        ])
+        let support = try SupportSettingsModel(diagnostics: .init(identity: identity), links: [
+            try SupportLink(.help, url: URL(string: "https://github.com/elixirevo/pinshot#readme")!),
+            try SupportLink(.contact, url: URL(string: "mailto:elixirevo@gmail.com")!),
+            try SupportLink(.reportIssue, url: URL(string: "https://github.com/elixirevo/pinshot/issues")!)
+        ], showOnboarding: reviewOnboarding)
+        let pages = try SettingsPages([
+            .builtIn(.general),
+            .custom(id: "features", title: appText("Features"), symbol: "display",
+                    color: Color(red: 0.30, green: 0.68, blue: 0.94)) {
+                FeatureSettings(model: preferences, setRegion: setRegion, preview: preview)
+            },
+            .builtIn(.shortcuts), .builtIn(.permissions), .builtIn(.updates), .support, .builtIn(.about)
+        ])
+        let navigation = self.navigation
+        navigation.configure(pages)
+        let login = preview ? LaunchAtLoginModel(read: { .disabled }, write: { _ in }, openSettings: {}) : LaunchAtLoginModel()
+        window = MacAppSettings.SettingsWindowController(title: "PinShot", autosaveName: "PinShot.SharedSettings",
+            navigation: navigation, onClose: { shortcuts.stopRecording() }) {
+            AppSettingsView(identity: identity, navigation: navigation, shortcuts: shortcuts,
+                permissions: permissions, updates: updates, launchAtLogin: login, pages: pages,
+                support: support, reset: reset,
+                supportContent: { AnyView(LegalDocumentsSection(documents: legal)) },
+                shortcutsContent: { AnyView(ShortcutRegistrationStatus()) }) {
+                    AppearanceSettings(preview: preview)
+                    if let diagnostics {
+                        DiagnosticsSettingsSection(preference: diagnostics, explanation: appText("Optional crash reports include app and macOS versions, device details, exceptions and technical call stacks. They are sent to Sentry to diagnose crashes. Screenshots are not attached. Changes apply after restarting PinShot. See the Privacy Policy in Help & Support for retention and international processing."))
+                    }
+                }
+        }
+    }
+
+    func show(_ page: SettingsPageID = .builtIn(.general)) {
+        preferences.reload()
+        shortcuts.refresh()
+        window.show(pageID: page)
+    }
+}
+
+enum SettingsAdapterError: LocalizedError {
+    case shortcutRequired
+    var errorDescription: String? { appText("Choose a shortcut for this action.") }
+}
+
+extension HotkeyAction {
+    static let settingsActions: [(HotkeyAction, String)] = [
+        (.screenshot, "Take Screenshot"), (.capture, "Capture & Pin"),
+        (.saveScreenshot, "Capture & Save Screenshot"), (.setScreenshotRegion, "Set Screenshot Region"),
         (.closeAll, "Close All Pins")
     ]
+}
 
-    init(permissions: PermissionManaging = PermissionGuideManager.shared) {
-        self.permissions = permissions
-        let window = SettingsWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 640, height: 580),
-            styleMask: [.titled, .closable], backing: .buffered, defer: false
-        )
-        window.title = "PinShot Settings"
-        window.isReleasedWhenClosed = false
-        window.collectionBehavior = .moveToActiveSpace
-        super.init(window: window)
-        window.delegate = self
-        buildContent()
-        window.center()
-        window.setFrameAutosaveName("PinShotSettings")
+extension HotkeyShortcut {
+    var settingsShortcut: SettingsShortcut {
+        var flags: NSEvent.ModifierFlags = []
+        if modifiers & UInt32(cmdKey) != 0 { flags.insert(.command) }
+        if modifiers & UInt32(optionKey) != 0 { flags.insert(.option) }
+        if modifiers & UInt32(controlKey) != 0 { flags.insert(.control) }
+        if modifiers & UInt32(shiftKey) != 0 { flags.insert(.shift) }
+        let label = HotkeyShortcut(keyCode: keyCode, modifiers: 0).displayString
+        return .init(keyCode: UInt16(keyCode), modifiers: flags, keyLabel: label)
     }
 
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
+    init(_ shortcut: SettingsShortcut) {
+        var mask: UInt32 = 0
+        if shortcut.modifierFlags.contains(.command) { mask |= UInt32(cmdKey) }
+        if shortcut.modifierFlags.contains(.option) { mask |= UInt32(optionKey) }
+        if shortcut.modifierFlags.contains(.control) { mask |= UInt32(controlKey) }
+        if shortcut.modifierFlags.contains(.shift) { mask |= UInt32(shiftKey) }
+        self.init(keyCode: UInt32(shortcut.keyCode), modifiers: mask)
     }
+}
 
-    func showSettings() {
-        refreshSettings()
-        showWindow(nil)
-        NSApp.activate(ignoringOtherApps: true)
-        window?.makeKeyAndOrderFront(nil)
-        startPermissionRefresh()
-    }
-
-    func windowDidBecomeKey(_ notification: Notification) {
-        refreshSettings()
-        startPermissionRefresh()
-    }
-
-    func windowWillClose(_ notification: Notification) {
-        stopPermissionRefresh()
-    }
-
-    deinit {
-        permissionRefreshTimer?.invalidate()
-    }
-
-    private func buildContent() {
-        guard let content = window?.contentView else { return }
-
-        launchAtLoginButton.target = self
-        launchAtLoginButton.action = #selector(toggleLaunchAtLogin)
-        loginDescription.font = .systemFont(ofSize: 11)
-        loginDescription.textColor = .secondaryLabelColor
-        let login = verticalStack([launchAtLoginButton, loginDescription], spacing: 4)
-
-        let regionButton = NSButton(title: "Set Region…", target: self, action: #selector(setScreenshotRegion))
-        regionButton.bezelStyle = .rounded
-        let region = row(
-            title: "Saved Screenshot Region",
-            detail: "Select a region and save a screenshot immediately.",
-            control: regionButton
-        )
-        historyEnabledButton.target = self
-        historyEnabledButton.action = #selector(togglePinHistory)
-        let historyDescription = NSTextField(wrappingLabelWithString:
-            "New pins are saved in the pinned screenshot folder. Turning history off keeps existing captures.")
-        historyDescription.font = .systemFont(ofSize: 11)
-        historyDescription.textColor = .secondaryLabelColor
-        for retention in PinHistoryRetention.allCases {
-            historyRetentionButton.addItem(withTitle: retention.title)
-            historyRetentionButton.lastItem?.tag = retention.rawValue
+private struct ShortcutRegistrationStatus: View {
+    @ObservedObject private var hotkeys = HotkeyManager.shared
+    var body: some View {
+        ForEach(HotkeyAction.settingsActions, id: \.1) { action, title in
+            if let error = hotkeys.registrationErrors[action] {
+                SettingsSection(appText(title)) { Text(error).foregroundColor(.secondary) }
+            }
         }
-        historyRetentionButton.target = self
-        historyRetentionButton.action = #selector(changeHistoryRetention)
-        historyRetentionButton.setAccessibilityLabel("Screenshot history limit")
-        let retentionRow = row(title: "History Limit", detail: nil, control: historyRetentionButton)
-        let retentionDescription = NSTextField(wrappingLabelWithString:
-            "When a new capture exceeds the limit, the oldest history entries and their PNG files are deleted.")
-        retentionDescription.font = .systemFont(ofSize: 11)
-        retentionDescription.textColor = .secondaryLabelColor
-        let historyButton = NSButton(title: "Open History…", target: self, action: #selector(openHistory))
-        historyButton.bezelStyle = .rounded
-        let history = verticalStack([historyEnabledButton, historyDescription, retentionRow, retentionDescription,
-            horizontalRow(label: NSView(), control: historyButton)], spacing: 6)
-        let general = verticalStack([login, separator(), region, separator(), history], spacing: 16)
+    }
+}
 
-        var rows: [NSView] = []
-        for (index, entry) in shortcutRows.enumerated() {
-            let (action, title) = entry
-            let button = NSButton(title: "", target: self, action: #selector(changeShortcut(_:)))
-            button.tag = index
-            button.bezelStyle = .rounded
-            button.font = .monospacedSystemFont(ofSize: 13, weight: .medium)
-            button.widthAnchor.constraint(equalToConstant: 112).isActive = true
-            button.setAccessibilityLabel("Change \(title) shortcut")
-            shortcutButtons[action] = button
+@MainActor
+final class FeaturePreferences: ObservableObject {
+    let store: CapturePreferences
+    @Published var revision = 0
+    init(preview: Bool = false) {
+        store = preview ? CapturePreferences(defaults: UserDefaults(suiteName: "PinShot.SettingsPreview")!) : .shared
+    }
+    func reload() { revision += 1 }
+    func restoreCaptureDefaults() { store.restoreDefaults(); reload() }
+}
 
-            let warning = NSTextField(labelWithString: "Shortcut unavailable")
-            warning.font = .systemFont(ofSize: 11)
-            warning.textColor = .secondaryLabelColor
-            warning.isHidden = true
-            shortcutWarnings[action] = warning
-            let label = verticalStack([NSTextField(labelWithString: title), warning], spacing: 2)
-            rows.append(horizontalRow(label: label, control: button))
-            if index < shortcutRows.count - 1 { rows.append(separator()) }
+private struct FeatureSettings: View {
+    @ObservedObject var model: FeaturePreferences
+    let setRegion: () -> Void
+    let preview: Bool
+    @State private var error: String?
+    @State private var confirmHistoryClear = false
+    @State private var historyError: String?
+    @State private var historyCleared = false
+
+    var body: some View {
+        SettingsSection(appText("Capture & Pin"), footer: appText("When a new capture exceeds the limit, the oldest history entries and their PNG files are deleted.")) {
+            SettingsToggle(appText("Save Capture & Pin history automatically"),
+                detail: appText("Turning history off keeps existing captures."),
+                isOn: Binding(get: { model.store.pinHistoryEnabled }, set: { model.store.pinHistoryEnabled = $0; model.reload() }))
+            SettingsPicker(appText("History Limit"), selection: Binding(get: { model.store.pinHistoryRetention }, set: { model.store.pinHistoryRetention = $0; model.reload() })) {
+                ForEach(PinHistoryRetention.allCases, id: \.rawValue) { value in
+                    Text(value == .unlimited ? appText("Never Delete") : String(format: appText("%d captures"), value.rawValue)).tag(value)
+                }
+            }
+            SettingsRow(appText("Screenshot History")) {
+                HStack {
+                    Button(appText("Open History…")) { if !preview { PinHistoryWindowController.shared.showHistory() } }
+                    Button(appText("Clear History…"), role: .destructive) { confirmHistoryClear = true }
+                        .disabled(preview)
+                }
+            }
+            if let historyError {
+                Text(appText("Could not clear all screenshot history. Please try again.") + "\n" + historyError)
+                    .foregroundColor(.red)
+            } else if historyCleared {
+                Text(appText("Screenshot history cleared.")).foregroundColor(.secondary)
+            }
         }
-
-        let resetButton = NSButton(title: "Restore Defaults", target: self, action: #selector(resetShortcuts))
-        resetButton.bezelStyle = .rounded
-        let footer = row(title: "Click a shortcut to change it.", detail: nil, control: resetButton)
-        let shortcuts = verticalStack(rows, spacing: 8)
-        let tabs = NSTabView()
-        tabs.translatesAutoresizingMaskIntoConstraints = false
-        content.addSubview(tabs)
-        NSLayoutConstraint.activate([
-            tabs.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
-            tabs.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
-            tabs.topAnchor.constraint(equalTo: content.topAnchor, constant: 16),
-            tabs.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -16)
-        ])
-        addTab("General", stack: verticalStack([section(title: "General", content: general)], spacing: 16), to: tabs)
-        addTab("Save Locations", stack: savingContent(), to: tabs)
-        let appearanceContainer = NSView()
-        appearanceView.translatesAutoresizingMaskIntoConstraints = false
-        appearanceContainer.addSubview(appearanceView)
-        NSLayoutConstraint.activate([
-            appearanceView.centerXAnchor.constraint(equalTo: appearanceContainer.centerXAnchor),
-            appearanceView.topAnchor.constraint(equalTo: appearanceContainer.topAnchor, constant: 12),
-            appearanceView.widthAnchor.constraint(equalToConstant: 370),
-            appearanceView.heightAnchor.constraint(equalToConstant: 386),
-            appearanceContainer.heightAnchor.constraint(equalToConstant: 410)
-        ])
-        addTab("Screenshot Frame", stack: verticalStack([appearanceContainer], spacing: 0), to: tabs)
-        addTab("Shortcuts", stack: verticalStack([section(title: "Keyboard Shortcuts", content: shortcuts), footer], spacing: 16), to: tabs)
-        addTab("Permissions", stack: permissionsContent(), to: tabs)
-    }
-
-    private func permissionsContent() -> NSStackView {
-        var rows: [NSView] = []
-        for (index, permission) in AppPermission.allCases.enumerated() {
-            let icon = NSImageView()
-            icon.setAccessibilityElement(false)
-            icon.widthAnchor.constraint(equalToConstant: 16).isActive = true
-            icon.heightAnchor.constraint(equalToConstant: 16).isActive = true
-            permissionIcons[permission] = icon
-            let status = NSTextField(labelWithString: "")
-            status.font = .systemFont(ofSize: 12, weight: .medium)
-            status.identifier = NSUserInterfaceItemIdentifier("permission.\(permission.rawValue).status")
-            permissionStatuses[permission] = status
-            let statusRow = NSStackView(views: [icon, status])
-            statusRow.orientation = .horizontal
-            statusRow.spacing = 6
-            let detail = NSTextField(wrappingLabelWithString: permission.detail)
-            detail.font = .systemFont(ofSize: 11)
-            detail.textColor = .secondaryLabelColor
-            let title = NSTextField(labelWithString: permission.title)
-            title.font = .systemFont(ofSize: 13, weight: .semibold)
-            let labels = verticalStack([title, detail, statusRow], spacing: 6)
-            let button = NSButton(title: "Request Access…", target: self, action: #selector(permissionClicked(_:)))
-            button.bezelStyle = .rounded
-            button.tag = index
-            button.identifier = NSUserInterfaceItemIdentifier("permission.\(permission.rawValue).action")
-            button.widthAnchor.constraint(equalToConstant: 138).isActive = true
-            permissionButtons[permission] = button
-            let permissionRow = NSStackView(views: [labels, button])
-            permissionRow.orientation = .horizontal
-            permissionRow.alignment = .centerY
-            permissionRow.distribution = .fill
-            permissionRow.spacing = 20
-            labels.setContentHuggingPriority(.defaultLow, for: .horizontal)
-            rows.append(permissionRow)
-            if index < AppPermission.allCases.count - 1 { rows.append(separator()) }
+        .alert(appText("Clear screenshot history?"), isPresented: $confirmHistoryClear) {
+            Button(appText("Cancel"), role: .cancel) {}
+            Button(appText("Clear History"), role: .destructive) { clearHistory() }
+        } message: {
+            Text(appText("All screenshot history and its automatically saved PNG files will be permanently deleted, including files in previous save folders. Manually saved copies and currently open pins will remain. This cannot be undone."))
         }
-        permissionSummary.font = .systemFont(ofSize: 12, weight: .medium)
-        permissionSummary.identifier = NSUserInterfaceItemIdentifier("permission.summary")
-        let refresh = NSButton(title: "Refresh Status", target: self, action: #selector(refreshPermissions))
-        refresh.bezelStyle = .rounded
-        refresh.identifier = NSUserInterfaceItemIdentifier("permission.refresh")
-        let note = NSTextField(wrappingLabelWithString:
-            "Enable PinShot in System Settings when prompted. Status updates automatically while this window is open. If macOS asks, quit and reopen PinShot to apply the change.")
-        note.font = .systemFont(ofSize: 12)
-        note.textColor = .secondaryLabelColor
-        return verticalStack([
-            section(title: "App Permissions", content: verticalStack(rows, spacing: 18)),
-            horizontalRow(label: permissionSummary, control: refresh), note
-        ], spacing: 18)
-    }
-
-    @objc private func permissionClicked(_ sender: NSButton) {
-        guard AppPermission.allCases.indices.contains(sender.tag) else { return }
-        let permission = AppPermission.allCases[sender.tag]
-        if permissions.isAuthorized(for: permission) {
-            permissions.openSettings(for: permission)
-        } else {
-            permissions.request(permission)
+        .onReceive(NotificationCenter.default.publisher(for: .pinHistoryChanged)) { _ in
+            historyCleared = false
         }
-        refreshPermissions()
-    }
-
-    @objc private func refreshPermissions() {
-        var allowedCount = 0
-        for permission in AppPermission.allCases {
-            let allowed = permissions.isAuthorized(for: permission)
-            if allowed { allowedCount += 1 }
-            let text = allowed ? "Allowed" : "Not Allowed"
-            permissionStatuses[permission]?.stringValue = text
-            permissionStatuses[permission]?.textColor = allowed ? .systemGreen : .secondaryLabelColor
-            permissionStatuses[permission]?.setAccessibilityLabel("\(permission.title): \(text)")
-            let icon = permissionIcons[permission]
-            icon?.image = NSImage(systemSymbolName: allowed ? "checkmark.circle.fill" : "exclamationmark.circle",
-                                 accessibilityDescription: nil)
-            icon?.contentTintColor = allowed ? .systemGreen : .systemOrange
-            let button = permissionButtons[permission]
-            button?.title = allowed ? "Open Settings…" : "Request Access…"
-            button?.setAccessibilityLabel(allowed ? "Open \(permission.title) settings" : "Request \(permission.title) access")
+        SettingsSection(appText("Saved Screenshot Region")) {
+            SettingsRow(appText("Select a region and save a screenshot immediately.")) {
+                Button(appText("Set Region…"), action: setRegion)
+            }
         }
-        permissionSummary.stringValue = "\(allowedCount) of \(AppPermission.allCases.count) permissions allowed"
-    }
-
-    private func startPermissionRefresh() {
-        guard permissionRefreshTimer == nil else { return }
-        let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            guard self.window?.isVisible == true else { self.stopPermissionRefresh(); return }
-            self.refreshPermissions()
+        SettingsSection(appText("Save Locations"), footer: appText("Changing folders affects new saves. Existing files are not moved.")) {
+            ForEach(CaptureDestination.allCases, id: \.rawValue) { destination in
+                SettingsRow(appText(destination.title), detail: model.store.directory(for: destination).path) {
+                    HStack {
+                        Button(appText("Show")) { showFolder(destination) }
+                        Button(appText("Choose…")) { chooseFolder(destination) }
+                    }
+                }
+            }
+            if let error { Text(error).foregroundColor(.red) }
         }
-        permissionRefreshTimer = timer
-        RunLoop.main.add(timer, forMode: .common)
-    }
-
-    private func stopPermissionRefresh() {
-        permissionRefreshTimer?.invalidate()
-        permissionRefreshTimer = nil
-    }
-
-    private func addTab(_ title: String, stack: NSStackView, to tabs: NSTabView) {
-        let item = NSTabViewItem(identifier: title)
-        item.label = title
-        let container = NSView()
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 20),
-            stack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -20),
-            stack.topAnchor.constraint(equalTo: container.topAnchor, constant: 20),
-            stack.bottomAnchor.constraint(lessThanOrEqualTo: container.bottomAnchor, constant: -20)
-        ])
-        item.view = container
-        tabs.addTabViewItem(item)
-    }
-
-    private func savingContent() -> NSStackView {
-        var rows: [NSView] = []
-        for (index, destination) in CaptureDestination.allCases.enumerated() {
-            let path = NSTextField(labelWithString: "")
-            path.font = .systemFont(ofSize: 11)
-            path.textColor = .secondaryLabelColor
-            path.lineBreakMode = .byTruncatingMiddle
-            path.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-            path.isSelectable = true
-            directoryLabels[destination] = path
-            let choose = NSButton(title: "Choose…", target: self, action: #selector(chooseDirectory(_:)))
-            choose.bezelStyle = .rounded
-            choose.tag = index
-            let open = NSButton(title: "Open", target: self, action: #selector(openDirectory(_:)))
-            open.bezelStyle = .rounded
-            open.tag = index
-            let buttons = NSStackView(views: [choose, open])
-            buttons.orientation = .horizontal
-            buttons.spacing = 4
-            let labels = verticalStack([NSTextField(labelWithString: destination.title), path], spacing: 6)
-            rows.append(horizontalRow(label: labels, control: buttons))
-            if index < CaptureDestination.allCases.count - 1 { rows.append(separator()) }
+        SettingsSection(appText("Screenshot Frame")) {
+            ScreenshotFrameSettings(preferences: model.store, revision: model.revision).frame(height: 390)
         }
-        let note = NSTextField(wrappingLabelWithString:
-            "Each capture type has its own folder. Changing a folder affects new saves; existing history stays available from its original location.")
-        note.font = .systemFont(ofSize: 12)
-        note.textColor = .secondaryLabelColor
-        return verticalStack([section(title: "Save Locations", content: verticalStack(rows, spacing: 20)), note], spacing: 16)
     }
 
-    @objc private func chooseDirectory(_ sender: NSButton) {
-        guard let window else { return }
-        let destination = CaptureDestination.allCases[sender.tag]
+    private func clearHistory() {
+        guard !preview else { return }
+        historyError = nil
+        historyCleared = false
+        do {
+            try PinHistoryStore.shared.clearHistory()
+            historyCleared = true
+        } catch { historyError = error.localizedDescription }
+    }
+
+    private func showFolder(_ destination: CaptureDestination) {
+        do {
+            let url = model.store.directory(for: destination)
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            if !NSWorkspace.shared.open(url) { throw CocoaError(.fileReadUnknown) }
+        } catch { self.error = error.localizedDescription }
+    }
+
+    private func chooseFolder(_ destination: CaptureDestination) {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.canCreateDirectories = true
         panel.allowsMultipleSelection = false
-        panel.prompt = "Choose Folder"
-        panel.message = "Save \(destination.title.lowercased()) in:"
-        panel.directoryURL = CapturePreferences.shared.directory(for: destination)
-        panel.beginSheetModal(for: window) { [weak self] response in
-            guard response == .OK, let url = panel.url else { return }
-            CapturePreferences.shared.setDirectory(url, for: destination)
-            self?.refreshSettings()
+        panel.directoryURL = model.store.directory(for: destination)
+        if panel.runModal() == .OK, let url = panel.url {
+            model.store.setDirectory(url, for: destination)
+            model.reload()
         }
-    }
-
-    @objc private func openDirectory(_ sender: NSButton) {
-        ScreenshotSaveManager.shared.openSaveDirectory(for: CaptureDestination.allCases[sender.tag])
-    }
-
-    @objc private func togglePinHistory() {
-        CapturePreferences.shared.pinHistoryEnabled = historyEnabledButton.state == .on
-        NotificationCenter.default.post(name: .pinHistoryChanged, object: nil)
-    }
-
-    @objc private func changeHistoryRetention() {
-        guard let tag = historyRetentionButton.selectedItem?.tag,
-              let retention = PinHistoryRetention(rawValue: tag) else { return }
-        // Apply the new limit on the next saved capture, not while editing Settings.
-        CapturePreferences.shared.pinHistoryRetention = retention
-    }
-
-    @objc private func openHistory() { PinHistoryWindowController.shared.showHistory() }
-
-    private func section(title: String, content: NSStackView) -> NSView {
-        let heading = NSTextField(labelWithString: title)
-        heading.font = .systemFont(ofSize: 13, weight: .semibold)
-        let box = NSBox()
-        box.titlePosition = .noTitle
-        box.boxType = .primary
-        content.translatesAutoresizingMaskIntoConstraints = false
-        box.addSubview(content)
-        NSLayoutConstraint.activate([
-            content.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: 14),
-            content.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -14),
-            content.topAnchor.constraint(equalTo: box.topAnchor, constant: 14),
-            content.bottomAnchor.constraint(equalTo: box.bottomAnchor, constant: -14)
-        ])
-        return verticalStack([heading, box], spacing: 8)
-    }
-
-    private func row(title: String, detail: String?, control: NSView) -> NSView {
-        var labels: [NSView] = [NSTextField(labelWithString: title)]
-        if let detail {
-            let description = NSTextField(wrappingLabelWithString: detail)
-            description.font = .systemFont(ofSize: 11)
-            description.textColor = .secondaryLabelColor
-            labels.append(description)
-        }
-        return horizontalRow(label: verticalStack(labels, spacing: 4), control: control)
-    }
-
-    private func horizontalRow(label: NSView, control: NSView) -> NSView {
-        let stack = NSStackView(views: [label, NSView(), control])
-        stack.orientation = .horizontal
-        stack.alignment = .centerY
-        stack.spacing = 12
-        control.setContentHuggingPriority(.required, for: .horizontal)
-        control.setContentCompressionResistancePriority(.required, for: .horizontal)
-        return stack
-    }
-
-    private func verticalStack(_ views: [NSView], spacing: CGFloat) -> NSStackView {
-        let stack = NSStackView(views: views)
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = spacing
-        for view in views {
-            view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        }
-        return stack
-    }
-
-    private func separator() -> NSView {
-        let separator = NSBox()
-        separator.boxType = .separator
-        return separator
-    }
-
-    private func refreshSettings() {
-        let loginManager = LoginLaunchManager.shared
-        launchAtLoginButton.isEnabled = loginManager.isSupported
-        launchAtLoginButton.state = loginManager.isEnabled ? .on : .off
-        loginDescription.stringValue = loginManager.isSupported
-            ? "Start PinShot automatically when you log in."
-            : "Launch at Login requires macOS 13 or later."
-
-        for (action, _) in shortcutRows {
-            let error = HotkeyManager.shared.registrationErrors[action]
-            shortcutButtons[action]?.title = HotkeyManager.shared.shortcut(for: action).displayString
-            shortcutButtons[action]?.toolTip = error ?? "Click to record a new shortcut."
-            shortcutWarnings[action]?.isHidden = error == nil
-            shortcutWarnings[action]?.toolTip = error
-        }
-        historyEnabledButton.state = CapturePreferences.shared.pinHistoryEnabled ? .on : .off
-        historyRetentionButton.selectItem(withTag: CapturePreferences.shared.pinHistoryRetention.rawValue)
-        for (destination, label) in directoryLabels {
-            let path = CapturePreferences.shared.directory(for: destination).path
-            label.stringValue = path
-            label.toolTip = path
-        }
-        appearanceView.reload()
-        refreshPermissions()
-    }
-
-    @objc private func toggleLaunchAtLogin() {
-        do {
-            try LoginLaunchManager.shared.setEnabled(launchAtLoginButton.state == .on)
-        } catch {
-            showError(title: "Could Not Update Login Setting", message: "Please check login item permission in System Settings and try again.")
-        }
-        refreshSettings()
-    }
-
-    @objc private func setScreenshotRegion() {
-        // Let the settings window leave the screen before freezing the capture.
-        window?.orderOut(nil)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            ScreenshotSaveManager.shared.selectRegionAndCaptureAndSave()
-        }
-    }
-
-    @objc private func changeShortcut(_ sender: NSButton) {
-        guard let window, window.attachedSheet == nil else { return }
-        let (action, title) = shortcutRows[sender.tag]
-        let alert = NSAlert()
-        alert.messageText = "Change \(title) Shortcut"
-        alert.informativeText = "Press the shortcut keys now. Modifier keys are optional. Press Return to save or Esc to cancel."
-        alert.addButton(withTitle: "Save")
-        alert.addButton(withTitle: "Cancel")
-        let recorder = HotkeyRecorderView(initialShortcut: HotkeyManager.shared.shortcut(for: action))
-        alert.accessoryView = recorder
-
-        HotkeyManager.shared.beginShortcutRecording()
-        alert.beginSheetModal(for: window) { [weak self] response in
-            HotkeyManager.shared.endShortcutRecording()
-            guard let self else { return }
-            if response == .alertFirstButtonReturn {
-                do {
-                    try HotkeyManager.shared.updateShortcut(action: action, shortcut: recorder.recordedShortcut)
-                } catch {
-                    self.showError(title: "Could Not Update Shortcut", message: error.localizedDescription)
-                }
-            }
-            self.refreshSettings()
-        }
-        alert.window.makeFirstResponder(recorder)
-    }
-
-    @objc private func resetShortcuts() {
-        do {
-            try HotkeyManager.shared.resetAllShortcuts()
-        } catch {
-            showError(title: "Could Not Restore Shortcuts", message: error.localizedDescription)
-        }
-        refreshSettings()
-    }
-
-    private func showError(title: String, message: String) {
-        guard let window else { return }
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = title
-        alert.informativeText = message
-        alert.addButton(withTitle: "OK")
-        alert.beginSheetModal(for: window)
     }
 }
 
-private final class SettingsWindow: NSWindow {
-    override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        if attachedSheet == nil, event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
-           event.keyCode == 13 { // Command-W also works in this menu bar app without a main menu.
-            performClose(nil)
-            return true
-        }
-        return super.performKeyEquivalent(with: event)
-    }
+// The frame editor is also used inside the capture overlay and remains app-specific.
+private struct ScreenshotFrameSettings: NSViewRepresentable {
+    let preferences: CapturePreferences
+    let revision: Int
+    func makeNSView(context: Context) -> ScreenshotAppearanceView { ScreenshotAppearanceView(preferences: preferences) }
+    func updateNSView(_ view: ScreenshotAppearanceView, context: Context) { view.reload() }
 }
 
-private final class HotkeyRecorderView: NSView {
-    private let valueLabel = NSTextField(labelWithString: "")
-    private(set) var recordedShortcut: HotkeyShortcut
-
-    init(initialShortcut: HotkeyShortcut) {
-        recordedShortcut = initialShortcut
-        super.init(frame: NSRect(x: 0, y: 0, width: 320, height: 48))
-        wantsLayer = true
-        layer?.cornerRadius = 8
-        layer?.borderWidth = 1
-        layer?.borderColor = NSColor.separatorColor.cgColor
-        valueLabel.font = .monospacedSystemFont(ofSize: 17, weight: .medium)
-        valueLabel.stringValue = initialShortcut.displayString
-        valueLabel.alignment = .center
-        valueLabel.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(valueLabel)
-        NSLayoutConstraint.activate([
-            valueLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
-            valueLabel.centerYAnchor.constraint(equalTo: centerYAnchor)
-        ])
-        setAccessibilityLabel("Shortcut recorder")
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    override var acceptsFirstResponder: Bool { true }
-
-    override func mouseDown(with event: NSEvent) {
-        window?.makeFirstResponder(self)
-    }
-
-    override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        guard window?.firstResponder === self else { return false }
-        return record(event)
-    }
-
-    override func keyDown(with event: NSEvent) {
-        if !record(event) { super.keyDown(with: event) }
-    }
-
-    private func record(_ event: NSEvent) -> Bool {
-        let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
-        // Keep the standard sheet Save/Cancel keys available.
-        if modifiers.isEmpty && (event.keyCode == 36 || event.keyCode == 53) { return false }
-        do {
-            recordedShortcut = try HotkeyShortcut.from(event: event)
-            valueLabel.stringValue = recordedShortcut.displayString
-        } catch {
-            NSSound.beep()
+struct AppearanceSettings: View {
+    let preview: Bool
+    @AppStorage("PinShot.appearance") private var appearance = "system"
+    var body: some View {
+        SettingsSection(appText("Appearance")) {
+            SettingsPicker(appText("Appearance"), selection: $appearance) {
+                Text(appText("System")).tag("system")
+                Text(appText("Light")).tag("light")
+                Text(appText("Dark")).tag("dark")
+            }.onChange(of: appearance) { _ in if !preview { Self.apply() } }
         }
-        return true
+    }
+    static func apply() {
+        switch UserDefaults.standard.string(forKey: "PinShot.appearance") {
+        case "light": NSApp.appearance = NSAppearance(named: .aqua)
+        case "dark": NSApp.appearance = NSAppearance(named: .darkAqua)
+        default: NSApp.appearance = nil
+        }
     }
 }

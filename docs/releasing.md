@@ -21,4 +21,6 @@ The app uses Sparkle 2.10.0 from its official binary distribution. `make sparkle
 
 The update feed is `https://github.com/elixirevo/pinshot/releases/latest/download/appcast.xml`. Upload it alongside both DMGs in each release. Never modify signed feed or package bytes after verification. The pipeline selects the correct architecture and verifies its signature, version, and hash before publication.
 
+Version 1.3.0 requires macOS 13 and uses build 1300 for Intel and 1301 for Apple Silicon. The `sentry` configuration in `deploy.json` binds the public resource in the app to the PinShot Sentry project. The build adapter copies each exact build's dSYM to `DSYM_PATH`; the shared pipeline uploads and verifies both UUIDs during validation and checks them again before publication. Preserve `dist/deploy/<version>/symbols/` privately; symbols are not GitHub release assets. Manual/local builds may still use `scripts/upload_sentry_symbols.py`.
+
 Existing 1.1.2 installations have no updater, so users need a one-time DMG or Homebrew upgrade to 1.2.0. Keep the same bundle identifier and Sparkle signing account for future updates.

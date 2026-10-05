@@ -87,6 +87,31 @@ final class PinHistoryStore {
         }
     }
 
+    /// Removes only indexed captures, including captures saved in previously selected folders.
+    /// Failed removals remain indexed so the user can retry without losing track of the files.
+    func clearHistory() throws {
+        if let loadError { throw loadError }
+        guard !entries.isEmpty else { return }
+        var retained: [PinHistoryEntry] = []
+        var firstError: Error?
+        for entry in entries {
+            do { try removeHistoryImage(entry) }
+            catch {
+                retained.append(entry)
+                if firstError == nil { firstError = error }
+            }
+        }
+        if retained.count != entries.count {
+            // If saving fails, keep the previous index in memory as well. A retry safely
+            // handles the files already removed, just like automatic retention cleanup.
+            try writeIndex(retained)
+            entries = retained
+            NotificationCenter.default.post(name: .pinHistoryChanged, object: self)
+        }
+        if let firstError { throw firstError }
+        lastRetentionError = nil
+    }
+
     private func removeHistoryImage(_ entry: PinHistoryEntry) throws {
         let url = entry.imageURL
         guard url.lastPathComponent == "PinShot_\(entry.id.uuidString).png" else {

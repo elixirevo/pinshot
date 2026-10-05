@@ -2,6 +2,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")"
+icon_source="$(pwd -P)/pinshot.icon"
 output_dir="${1:-build/icons}"
 
 # Command Line Tools does not include actool or Icon Composer. Use the
@@ -21,15 +22,15 @@ fi
 temp_dir="$(mktemp -d)"
 trap 'rm -rf "$temp_dir"' EXIT
 
-xcrun actool pinshot.icon \
+xcrun actool "$icon_source" \
     --compile "$temp_dir" \
     --output-format human-readable-text --notices --warnings --errors \
     --output-partial-info-plist "$temp_dir/Info.plist" \
     --app-icon pinshot --include-all-app-icons \
     --enable-on-demand-resources NO --development-region en \
-    --target-device mac --minimum-deployment-target 12.0 --platform macosx
+    --target-device mac --minimum-deployment-target 13.0 --platform macosx
 
-"$ictool" pinshot.icon --export-image \
+"$ictool" "$icon_source" --export-image \
     --output-file "$temp_dir/icon.png" \
     --platform macOS --rendition Default --width 1024 --height 1024 --scale 1
 

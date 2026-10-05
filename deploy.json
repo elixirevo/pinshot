@@ -9,5 +9,9 @@
   "feed_name": "appcast.xml",
   "tap_path": "../tools/homebrew-tap",
   "cask_token": "pinshot",
-  "cask_template": "homebrew/Casks/pinshot.rb"
+  "cask_template": "homebrew/Casks/pinshot.rb",
+  "sentry": {
+    "configuration": "Sources/Resources/SentryConfiguration.json",
+    "bundled_configuration": "Contents/Resources/PinShot_PinShotApp.bundle/Contents/Resources/SentryConfiguration.json"
+  }
 }

@@ -1,171 +1,156 @@
 import Cocoa
-import Sparkle
+import MacAppCore
+import MacAppSettings
+import MacAppMenuBar
+import MacAppMainMenu
+import MacAppLifecycle
+import MacAppUpdatesSparkle
 
-class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
-    var statusItem: NSStatusItem!
-    private lazy var settingsWindowController = SettingsWindowController()
-    private var captureMenuItem: NSMenuItem?
-    private var screenshotMenuItem: NSMenuItem?
-    private var saveScreenshotMenuItem: NSMenuItem?
-    private var closeAllMenuItem: NSMenuItem?
-    private let updaterController = SPUStandardUpdaterController(
-        startingUpdater: false, updaterDelegate: nil, userDriverDelegate: nil)
-    
-    func applicationDidFinishLaunching(_ aNotification: Notification) {
-        setupStatusBar()
-        setupHotkeys()
-        updaterController.startUpdater()
-        PermissionGuideManager.shared.checkAndGuidePermissionsIfNeeded()
-    }
+@MainActor
+public final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var menuBar: MenuBarController?
+    private var mainMenu: MainMenuController?
+    private var onboarding: OnboardingCoordinator?
+    private var settings: PinShotSettings?
+    private var diagnostics: AppDiagnostics?
+    private var servicesStarted = false
+    private let updates = SparkleUpdates()
+    private lazy var lifecycle = AppLifecycleController(mode: .accessory,
+        reopen: .custom { [weak self] _ in self?.reopen() })
+    private let permissions = PermissionSettingsModel([
+        .screenRecording(detail: appText("Capture screenshots and pin images from your screen. Images are processed on your Mac.")),
+        .accessibility(detail: appText("Optional: run macro keyboard actions and use Escape to dismiss overlays while another app is active."))
+    ])
 
-    func applicationWillTerminate(_ notification: Notification) {
-        PinManager.shared.finishEditing()
-    }
-    
-    private func setupStatusBar() {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        if let button = statusItem.button {
-            let image = makeStableStatusBarIcon()
+    public override init() { super.init() }
 
-            button.image = image
-            button.title = ""
-            button.imagePosition = .imageOnly
-            button.imageScaling = .scaleNone
-        }
-        
-        let menu = NSMenu()
-        let screenshotItem = NSMenuItem(title: "Take Screenshot…", action: #selector(screenshotClicked), keyEquivalent: "")
-        screenshotItem.target = self
-        menu.addItem(screenshotItem)
-        screenshotMenuItem = screenshotItem
-
-        let captureItem = NSMenuItem(title: "Capture & Pin", action: #selector(captureClicked), keyEquivalent: "")
-        captureItem.target = self
-        menu.addItem(captureItem)
-        captureMenuItem = captureItem
-
-        let saveScreenshotItem = NSMenuItem(
-            title: "Capture & Save Screenshot",
-            action: #selector(saveScreenshotClicked),
-            keyEquivalent: ""
-        )
-        saveScreenshotItem.target = self
-        menu.addItem(saveScreenshotItem)
-        saveScreenshotMenuItem = saveScreenshotItem
-
-        let closeItem = NSMenuItem(title: "Close All Pins", action: #selector(closeAllClicked), keyEquivalent: "")
-        closeItem.target = self
-        menu.addItem(closeItem)
-        closeAllMenuItem = closeItem
-
-        let historyItem = NSMenuItem(title: "Screenshot History…", action: #selector(openHistory), keyEquivalent: "")
-        historyItem.target = self
-        menu.addItem(historyItem)
-
-        menu.addItem(NSMenuItem.separator())
-        let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
-        settingsItem.target = self
-        menu.addItem(settingsItem)
-        let updatesItem = NSMenuItem(title: "Check for Updates…",
-            action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)), keyEquivalent: "")
-        updatesItem.target = updaterController
-        menu.addItem(updatesItem)
-        menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "Quit PinShot", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
-        menu.delegate = self
-        
-        statusItem.menu = menu
-        updateHotkeyMenuItems()
-    }
-
-    private func makeStableStatusBarIcon() -> NSImage? {
-        let symbolConfig = NSImage.SymbolConfiguration(pointSize: 16, weight: .semibold, scale: .small)
-        guard let symbol = NSImage(systemSymbolName: "pin.fill", accessibilityDescription: "PinShot")?.withSymbolConfiguration(symbolConfig) else {
-            return nil
-        }
-
-        // Draw the symbol into a fixed canvas so third-party menubar managers do not reflow variable symbol bounds.
-        let canvasSize = NSSize(width: 18, height: 18)
-        let icon = NSImage(size: canvasSize)
-        icon.lockFocus()
-        symbol.draw(
-            in: NSRect(x: 1.0, y: 0.8, width: 16, height: 16),
-            from: .zero,
-            operation: .sourceOver,
-            fraction: 1.0
-        )
-        icon.unlockFocus()
-        icon.isTemplate = true
-        return icon
-    }
-    
-    private func setupHotkeys() {
-        // Initialize the shared hotkey manager
-        let _ = HotkeyManager.shared
-
-        HotkeyManager.shared.onScreenshotShortcut = { [weak self] in
-            self?.screenshotClicked()
-        }
-        
-        HotkeyManager.shared.onCaptureShortcut = { [weak self] in
-            self?.captureClicked()
-        }
-
-        HotkeyManager.shared.onSaveScreenshotShortcut = { [weak self] in
-            self?.saveScreenshotClicked()
-        }
-
-        HotkeyManager.shared.onSetScreenshotRegionShortcut = { [weak self] in
-            self?.setScreenshotRegionClicked()
-        }
-        
-        HotkeyManager.shared.onCloseAllShortcut = { [weak self] in
-            self?.closeAllClicked()
+    public func applicationDidFinishLaunching(_ notification: Notification) {
+        do {
+            try lifecycle.start()
+            AppearanceSettings.apply()
+            let identity = SettingsIdentity(bundle: .main, icon: NSApp.applicationIconImage,
+                website: URL(string: "https://github.com/elixirevo/pinshot"))
+            let documents = try LegalDocuments()
+            let diagnostics = try AppDiagnostics()
+            self.diagnostics = diagnostics
+            onboarding = try OnboardingCoordinator(identity: identity, documents: documents,
+                permissions: permissions, diagnostics: diagnostics.settingsPreference,
+                onReady: { [weak self] in self?.startServices() })
+            settings = try PinShotSettings(identity: identity, permissions: permissions,
+                updates: updates.settings, legal: documents, diagnostics: diagnostics.settingsPreference,
+                reviewOnboarding: { [weak self] in self?.onboarding?.review() },
+                setRegion: { [weak self] in
+                    self?.perform {
+                        self?.settings?.window.close()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                            ScreenshotSaveManager.shared.selectRegionAndCaptureAndSave()
+                        }
+                    }
+                })
+            PermissionGuideManager.shared.showPermissions = { [weak self] in
+                self?.perform { self?.settings?.show(.builtIn(.permissions)) }
+            }
+            try installMenus()
+            if onboarding?.showIfNeeded() == false { startServices() }
+        } catch {
+            let alert = NSAlert(error: error)
+            alert.messageText = appText("PinShot could not start")
+            alert.runModal()
+            NSApp.terminate(nil)
         }
     }
-    
-    @objc private func captureClicked() {
+
+    private func startServices() {
+        guard onboarding?.agreement.allowsAppUse == true, !servicesStarted else { return }
+        servicesStarted = true
+        do { try diagnostics?.start() }
+        catch { NSApp.presentError(error) }
+        let hotkeys = HotkeyManager.shared
+        hotkeys.onScreenshotShortcut = { [weak self] in self?.perform { CaptureManager.shared.startScreenshot() } }
+        hotkeys.onCaptureShortcut = { [weak self] in self?.perform { self?.capture() } }
+        hotkeys.onSaveScreenshotShortcut = { [weak self] in self?.perform { ScreenshotSaveManager.shared.captureUsingSavedRegionOrPromptSelection() } }
+        hotkeys.onSetScreenshotRegionShortcut = { [weak self] in self?.perform { ScreenshotSaveManager.shared.selectRegionAndCaptureAndSave() } }
+        hotkeys.onCloseAllShortcut = { [weak self] in self?.perform { PinManager.shared.closeAll() } }
+        hotkeys.start()
+        do { try updates.start() }
+        catch { NSApp.presentError(error) }
+        menuBar?.refresh()
+    }
+
+    private func perform(_ action: () -> Void) {
+        guard servicesStarted, onboarding?.agreement.allowsAppUse == true else {
+            onboarding?.showIfNeeded()
+            return
+        }
+        action()
+    }
+
+    private func capture() {
         CaptureManager.shared.startCapture { result in
-            guard let result = result else { return }
+            guard let result else { return }
             PinManager.shared.pin(image: result.0, at: result.1, recordHistory: true)
         }
     }
 
-    @objc private func screenshotClicked() {
-        // A menu invocation should not freeze the status menu into the screenshot.
-        DispatchQueue.main.async { CaptureManager.shared.startScreenshot() }
+    private func installMenus() throws {
+        func captureCommand(_ action: HotkeyAction, _ title: String, run: @escaping () -> Void) -> MenuBarItem {
+            .command(.init(id: title, title: appText(title), state: { [weak self] in
+                let error = HotkeyManager.shared.registrationErrors[action]
+                return .init(isEnabled: self?.servicesStarted == true,
+                    title: appText(title) + " (" + HotkeyManager.shared.shortcut(for: action).displayString + ")" +
+                        (error == nil ? "" : " — " + appText("Shortcut Unavailable")), toolTip: error)
+            }, action: { [weak self] in self?.perform(run) }))
+        }
+        var items: [MenuBarItem] = [
+            captureCommand(.screenshot, "Take Screenshot", run: { CaptureManager.shared.startScreenshot() }),
+            captureCommand(.capture, "Capture & Pin", run: { [weak self] in self?.capture() }),
+            captureCommand(.saveScreenshot, "Capture & Save Screenshot", run: { ScreenshotSaveManager.shared.captureUsingSavedRegionOrPromptSelection() }),
+            captureCommand(.setScreenshotRegion, "Set Screenshot Region", run: { ScreenshotSaveManager.shared.selectRegionAndCaptureAndSave() }),
+            captureCommand(.closeAll, "Close All Pins", run: { PinManager.shared.closeAll() }),
+            .command(.init(id: "history", title: appText("Screenshot History…"), state: { [weak self] in
+                .init(isEnabled: self?.servicesStarted == true)
+            }, action: { [weak self] in self?.perform { PinHistoryWindowController.shared.showHistory() } })),
+            .separator,
+            .command(.settings { [weak self] in self?.reopen() })
+        ]
+        items += MenuBarCommand.updateItems(distribution: .direct,
+            manualState: { [weak self] in .init(isEnabled: self?.servicesStarted == true && self?.updates.settings.canCheckForUpdates == true) },
+            check: { [weak self] in self?.perform { Task { await self?.updates.settings.checkForUpdates() } } },
+            automaticState: { [weak self] in
+                .init(isEnabled: self?.servicesStarted == true && self?.updates.settings.canChangeAutomaticChecks == true,
+                      checkState: self?.updates.settings.automaticChecksEnabled == true ? .on : .off)
+            }, toggleAutomatic: { [weak self] in self?.perform { self?.updates.settings.toggleAutomaticChecks() } })
+        items += [.separator, .command(.quit(appName: "PinShot") { NSApp.terminate(nil) })]
+        menuBar = try MenuBarController(configuration: .init(id: "PinShot.StatusItem", accessibilityLabel: "PinShot",
+            toolTip: "PinShot", icon: .systemSymbol("pin.fill"), items: items))
+        menuBar?.install()
+        mainMenu = try MainMenuController(configuration: .init(appName: "PinShot",
+            settings: { [weak self] in self?.reopen() },
+            about: { [weak self] in self?.perform { self?.settings?.show(.builtIn(.about)) } },
+            help: { [weak self] in self?.perform { self?.settings?.show(.support) } },
+            sidebar: .init(id: "sidebar", title: appText("Toggle Sidebar"),
+                shortcut: .init("s", modifiers: [.command, .control]),
+                state: { [weak self] in .init(isEnabled: self?.settings?.window.window?.isKeyWindow == true) },
+                action: .perform { [weak self] in self?.settings?.navigation.toggleSidebar() })))
+        mainMenu?.install()
     }
 
-    @objc private func saveScreenshotClicked() {
-        ScreenshotSaveManager.shared.captureUsingSavedRegionOrPromptSelection()
+    private func reopen() {
+        if onboarding?.showIfNeeded() == true { return }
+        perform { settings?.show() }
     }
 
-    @objc private func setScreenshotRegionClicked() {
-        ScreenshotSaveManager.shared.selectRegionAndCaptureAndSave()
+    public func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        lifecycle.handleReopen(hasVisibleWindows: flag)
     }
 
-    @objc private func closeAllClicked() {
-        PinManager.shared.closeAll()
+    public func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        lifecycle.shouldTerminateAfterLastWindowClosed
     }
 
-    @objc private func openSettings() {
-        settingsWindowController.showSettings()
-    }
-
-    @objc private func openHistory() {
-        DispatchQueue.main.async { PinHistoryWindowController.shared.showHistory() }
-    }
-
-    func menuNeedsUpdate(_ menu: NSMenu) {
-        updateHotkeyMenuItems()
-    }
-
-    private func updateHotkeyMenuItems() {
-        let unavailable = HotkeyManager.shared.registrationErrors[.screenshot]
-        screenshotMenuItem?.title = "Take Screenshot… (\(HotkeyManager.shared.screenshotShortcutDisplay))" + (unavailable == nil ? "" : " — Shortcut Unavailable")
-        screenshotMenuItem?.toolTip = unavailable
-        captureMenuItem?.title = "Capture & Pin (\(HotkeyManager.shared.captureShortcutDisplay))"
-        saveScreenshotMenuItem?.title = "Capture & Save Screenshot (\(HotkeyManager.shared.saveScreenshotShortcutDisplay))"
-        closeAllMenuItem?.title = "Close All Pins (\(HotkeyManager.shared.closeAllShortcutDisplay))"
+    public func applicationWillTerminate(_ notification: Notification) {
+        if servicesStarted { PinManager.shared.finishEditing() }
+        menuBar?.remove()
+        mainMenu?.uninstall()
     }
 }

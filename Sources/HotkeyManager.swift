@@ -1,5 +1,6 @@
 import Cocoa
 import Carbon
+import Combine
 
 enum HotkeyAction: Hashable {
     case screenshot
@@ -173,7 +174,7 @@ struct HotkeyShortcut: Equatable {
     }
 }
 
-class HotkeyManager {
+class HotkeyManager: ObservableObject {
     static let shared = HotkeyManager()
 
     var onScreenshotShortcut: (() -> Void)?
@@ -198,9 +199,10 @@ class HotkeyManager {
     private var setScreenshotRegionHotKeyRef: EventHotKeyRef?
     private var closeAllHotKeyRef: EventHotKeyRef?
     private var isRecordingShortcut = false
+    private var isStarted = false
 
     private var screenshotShortcut: HotkeyShortcut
-    private(set) var registrationErrors: [HotkeyAction: String] = [:]
+    @Published private(set) var registrationErrors: [HotkeyAction: String] = [:]
     private var captureShortcut: HotkeyShortcut
     private var saveScreenshotShortcut: HotkeyShortcut
     private var setScreenshotRegionShortcut: HotkeyShortcut
@@ -245,6 +247,11 @@ class HotkeyManager {
             key: "hotkey.closeAll",
             fallback: HotkeyShortcut(keyCode: UInt32(kVK_ANSI_W), modifiers: UInt32(cmdKey | optionKey))
         )
+    }
+
+    func start() {
+        guard !isStarted else { return }
+        isStarted = true
         setupHotkeyEventHandler()
         registerConfiguredHotkeys()
     }
@@ -298,6 +305,10 @@ class HotkeyManager {
     func endShortcutRecording() {
         guard isRecordingShortcut else { return }
         isRecordingShortcut = false
+        // The shared recorder writes before ending its recording session. Its write
+        // already registered the edited action to validate it, so release that
+        // registration before resuming the complete set.
+        unregisterAllHotkeys()
         registerConfiguredHotkeys()
     }
 
@@ -370,6 +381,7 @@ class HotkeyManager {
     }
 
     private func registerConfiguredHotkeys() {
+        guard isStarted else { return }
         registrationErrors.removeAll()
         // A conflict for one action must not disable the remaining shortcuts.
         let actions: [HotkeyAction] = [.capture, .closeAll, .saveScreenshot, .setScreenshotRegion, .screenshot]

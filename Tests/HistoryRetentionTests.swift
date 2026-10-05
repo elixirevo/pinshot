@@ -1,3 +1,4 @@
+@testable import PinShotApp
 import Cocoa
 
 func testHistoryRetention() throws {

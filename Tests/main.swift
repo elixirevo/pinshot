@@ -1,3 +1,4 @@
+@testable import PinShotApp
 import Cocoa
 
 func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
@@ -242,12 +243,17 @@ expect(matches(bitmap(pinCanvas.renderedImage()!).colorAt(x: 40, y: 170)!, .red)
 print("PASS: asymmetric padding, rounded alpha, Retina export, separate folders and save errors, persistent history, history opt-out, folder changes, edited history, corrupt-index protection, pin drawing/undo/redo")
 
 try testHistoryRetention()
+try testHistoryClearing()
 try testPinInterface()
 try testScreenshotFrames()
-testPermissionSettings()
+try MainActor.assumeIsolated {
+    testPermissionSettings()
+    try testEssentialsIntegration()
+    try testDiagnostics()
+}
 
-if CommandLine.arguments.contains("--preview-settings") || Bundle.main.bundleIdentifier == "com.elixirevo.PinShot.SettingsPreview" {
-    previewPermissionSettings()
+if CommandLine.arguments.contains("--preview-settings") || CommandLine.arguments.contains("--preview-onboarding") || Bundle.main.bundleIdentifier == "com.elixirevo.PinShot.SettingsPreview" {
+    MainActor.assumeIsolated { previewPermissionSettings() }
 }
 
 if CommandLine.arguments.contains("--preview-pins") || Bundle.main.bundleIdentifier == "com.elixirevo.PinShot.PinPreview" {
@@ -263,6 +269,7 @@ if CommandLine.arguments.contains("--preview") || ["com.elixirevo.PinShot.Editor
     window.isFloatingPanel = false
     window.title = "PinShot Screenshot Editor Test"
     let editor = window.contentView as! ScreenshotOverlayView
+    editor.screenshotStyle = ScreenshotStyle()
     let image = fixture(width: 2100, height: 1440)
     editor.sourceImage = image
     editor.backgroundImage = NSImage(cgImage: image, size: frame.size)

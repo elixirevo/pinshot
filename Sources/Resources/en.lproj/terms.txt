@@ -1,0 +1,44 @@
+PinShot Terms of Use
+Version: 2026-10-05
+Effective date: October 5, 2026
+
+1. Operator and scope
+PinShot is provided by elixirevo (the “Operator”). Contact: elixirevo@gmail.com. Project and release information: https://github.com/elixirevo/pinshot. These Terms govern the directly distributed, free macOS app. Current bundled Terms and Privacy Policy are available in Settings > Help & Support; versioned source documents are kept in the project repository.
+
+2. Agreement and eligibility
+Read these Terms and explicitly select the agreement checkbox and acceptance button before using the App. Closing the agreement does not accept it. PinShot is a general-purpose utility intended for adults with legal capacity. If you act for an organization, you must have authority to do so. Mandatory consumer protections remain applicable.
+
+3. Permission to use the App
+You may install and use PinShot on compatible Macs you control for lawful personal or professional purposes. Rights granted under a separately applicable open-source license are not restricted by these Terms. Third-party components retain their own licenses. No ownership of the App or third-party materials is transferred to you.
+
+4. Features and your responsibilities
+PinShot captures screen regions or windows, annotates and saves images, displays floating pins, keeps local screenshot history, and can repeat captures and keyboard actions using macros. Screen Recording permission is needed for capture. Accessibility permission supports macro keyboard actions and Escape handling while another app is active. Only grant permissions you want to use, and monitor macros and their destination app.
+Only capture or use content you are authorized to access. Do not use PinShot to infringe privacy, intellectual-property rights or applicable law, bypass security controls, or disrupt other systems. These Terms do not prohibit conduct that mandatory law permits.
+
+5. Your content and local files
+You retain your rights to screenshots and annotations. PinShot does not upload screenshots to the Operator. You control save folders and any copies or backups. Automatic pin history is initially enabled with a 30-capture limit. After a successful new history save, entries above the selected limit and their original PNG files are deleted oldest first. “Never Delete” disables count-based cleanup; turning history off preserves existing history. Save important copies separately. Uninstalling the App may leave files and preferences behind.
+
+6. Fees
+The current App is free. There are no accounts, paid features, subscriptions, automatic renewals or payment collection. Any future paid offer requires separate information and agreement before charging; accepting these Terms does not authorize future charges.
+
+7. Stopping use and remedies
+You can stop using and uninstall PinShot at any time. There is no current purchase fee to refund. Contact elixirevo@gmail.com about defects or other rights. Applicable statutory remedies and consumer rights are preserved.
+
+8. Updates and discontinuation
+Updates may address defects, security and compatibility. Supported systems and material changes are described in releases. Automatic checks follow Settings > Software Update; download and installation choices are managed by Sparkle. Checks and downloads contact GitHub and its delivery infrastructure.
+We ordinarily announce material reductions in core functions or discontinuation at least 30 days in advance through the App or project releases. Urgent security or legal requirements may require faster action, in which case we explain the change as soon as reasonably possible. Longer mandatory notice periods apply. Local files remain under your control.
+
+9. Restrictions and termination
+For a material breach or concrete security threat, we may restrict services we provide only to the extent necessary and ordinarily explain the reason and opportunity to remedy it. Necessary urgent action may precede notice. You may contest an action using the contact in Section 1. PinShot does not have an account suspension system or a remote screenshot deletion service. Accrued rights and necessary dispute provisions survive cessation of use.
+
+10. Reliability and liability
+We use reasonable care in providing PinShot and addressing known material problems. We cannot guarantee error-free operation on every device or compatibility with every app. Keep independent copies of important files and check capture and macro results. Each party is responsible for harm attributable to that party under applicable law. We do not exclude liability for intentional misconduct, gross negligence, personal injury, or liability that cannot legally be excluded or limited. These Terms do not impose a blanket consumer indemnity.
+
+11. External services
+GitHub hosts the project, issue tracker and releases. Email support uses Gmail. Those services apply their own terms and privacy policies. Opening a link or submitting a message is a separate action; we remain responsible for our own obligations. This release is distributed directly, not through the App Store.
+
+12. Changes to these Terms
+We announce the changes, reasons and effective date in the App or project releases at least seven days before ordinary changes and at least 30 days before material or unfavorable changes, subject to longer mandatory periods. Revised versions requiring agreement are presented with their full text and a separate acceptance action. Silence or continued use alone is not acceptance of such changes. Changes do not apply retroactively to existing disputes, and mandatory rights remain protected.
+
+13. Disputes and language
+Applicable law determines governing law and courts with jurisdiction, preserving mandatory protections where you habitually reside, including applicable Korean and US consumer protections. Contact us to seek a resolution; doing so is not required before seeking a statutory remedy, filing a complaint or going to court. These Terms do not require arbitration, waive class actions or impose an exclusive foreign court. Korean and English versions describe the same rights and duties. Interpretation considers the language presented and applicable consumer law; translation differences do not reduce mandatory rights. Invalid provisions do not invalidate the remainder to the extent permitted by law.

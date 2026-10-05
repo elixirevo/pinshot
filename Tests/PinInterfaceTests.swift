@@ -1,3 +1,4 @@
+@testable import PinShotApp
 import Cocoa
 
 private func descendant<T: NSView>(_ type: T.Type, in view: NSView) -> T? {
